@@ -17,12 +17,22 @@ if [ "$product" = "SE6-CTRL" ] || [ "$product" = "SE6 CTRL" ] || [ "$product" = 
     INTERFACE_1="eth1"
     # WAN="enp4s0"
 else #se8 x86
-    seNCtrl_HOST_SUB_ETHS+=('eno1' 'enp2s0f0' 'bond0')
-    seNCtrl_DEBUG_UART=/dev/ttyS1
-    YAML_FILE="/etc/netplan/01-network-manager-all.yaml"
-    INTERFACE_0="eno1"
-    INTERFACE_1="eno3"
-    WAN="eno5"
+    if [ -f /factory/OEMconfig.ini ]; then #se8-s1 or se8-2u
+        seNCtrl_HOST_SUB_ETHS+=('eno1' 'enp2s0f0' 'bond0')
+        seNCtrl_DEBUG_UART=/dev/ttyS1
+        YAML_FILE="/etc/netplan/01-network-manager-all.yaml"
+        INTERFACE_0="enp2s0f0"
+        INTERFACE_1="enp2s0f1"
+        INTERFACE_2="enp2s0f2"
+        WAN="enp4s0f0"
+    else # se8-288
+        seNCtrl_HOST_SUB_ETHS+=('eno1' 'enp2s0f0' 'bond0')
+        seNCtrl_DEBUG_UART=/dev/ttyS1
+        YAML_FILE="/etc/netplan/01-network-manager-all.yaml"
+        INTERFACE_0="eno1"
+        INTERFACE_1="eno3"
+        WAN="eno5"
+    fi
 fi
 
 source ${seNCtrl_PWD}/configs/sub/subInfo.12
