@@ -52,3 +52,26 @@ If you have modified parameters such as SSH port and password for the computatio
 ## Update method
 
 On our SFTP server 106.37.111.18:32022, the public account is open:open, located under /tools/bmsec, download the deb package and install it with 'dpkg -i'
+
+## Build from source
+
+Before building the bmsec deb package, you must first build socbak (`socbak.zip` is shipped inside `deb/opt/sophon/bmsec/binTools/`).
+
+```bash
+# 1. Build socbak first
+cd source/psocbak
+bash release.sh
+cd -
+
+# 2. Then build bmsec
+cd source/pbmsec
+bash release.sh
+```
+
+`pbmsec/release.sh` auto-syncs `socbak.zip` from `../psocbak/socbak.zip` into `deb/opt/sophon/bmsec/binTools/socbak.zip`. If the source zip is missing, it reuses the prebuilt one already in `binTools/`; if neither exists, it fails with an error.
+
+If you don't want to build socbak yourself, you can also download a prebuilt `socbak.zip` from https://github.com/sophgo/sophon-tools/releases and place it at `source/psocbak/socbak.zip` (or directly at `source/pbmsec/deb/opt/sophon/bmsec/binTools/socbak.zip`), then run `pbmsec/release.sh`.
+
+Dependencies: `pandoc`, `dpkg-deb`.
+
+Output: `output/bmsec_v<version>.deb`.

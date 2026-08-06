@@ -4,7 +4,7 @@ BUILD_RET=0
 
 echo "build bmsec ..."
 
-BMSEC_PACKAGE_VERSION="1.6.3"
+BMSEC_PACKAGE_VERSION="1.6.4"
 
 export CMD_PANDOC=$(command -v pandoc)
 export CMD_DPKG_DEB=$(command -v dpkg-deb)
@@ -14,6 +14,23 @@ rm -rf *.deb* 2>/dev/null
 rm -rf output 2>/dev/null
 rm -rf ./*.html
 mkdir output
+
+# Sync socbak.zip from sibling psocbak project.
+# Run psocbak/release.sh first if a fresh build is needed; otherwise the
+# prebuilt socbak.zip is reused. The zip is shipped inside bmsec/binTools/.
+SOCBAK_SRC="$(dirname "$(pwd)")/psocbak/socbak.zip"
+SOCBAK_DST="deb/opt/sophon/bmsec/binTools/socbak.zip"
+if [ -f "$SOCBAK_SRC" ]; then
+	echo "sync socbak.zip from $SOCBAK_SRC"
+	cp "$SOCBAK_SRC" "$SOCBAK_DST"
+else
+	if [ ! -f "$SOCBAK_DST" ]; then
+		echo "ERROR: socbak.zip not found at $SOCBAK_SRC or $SOCBAK_DST"
+		echo "       run bash release.sh in the psocbak project first, or place socbak.zip manually"
+		exit 1
+	fi
+	echo "WARN: $SOCBAK_SRC not found, reuse existing $SOCBAK_DST"
+fi
 
 if [ -f "$CMD_PANDOC" ] && [ -f "$CMD_DPKG_DEB" ]; then
 	echo "found $CMD_PANDOC and $CMD_DPKG_DEB"
