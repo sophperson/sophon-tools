@@ -58,3 +58,26 @@
 ## 更新方式
 
 在我们的SFTP服务器106.37.111.18:32022上，公开账密为open:open，位置在/tools/bmsec下，下载deb包后使用`dpkg -i`安装即可
+
+## 从源码打包
+
+打包 bmsec deb 包前，需要先打包 socbak（`socbak.zip` 内置于 `deb/opt/sophon/bmsec/binTools/`）。
+
+```bash
+# 1. 先打包 socbak
+cd source/psocbak
+bash release.sh
+cd -
+
+# 2. 再打包 bmsec
+cd source/pbmsec
+bash release.sh
+```
+
+`pbmsec/release.sh` 会自动从 `../psocbak/socbak.zip` 同步到 `deb/opt/sophon/bmsec/binTools/socbak.zip`。若源 zip 不存在，则复用 `binTools/` 下已有的 `socbak.zip`；若两者都不存在则报错退出。
+
+若不想自行打包 socbak，也可从 https://github.com/sophgo/sophon-tools/releases 下载现成的 `socbak.zip`，放置到 `source/psocbak/socbak.zip`（或直接放到 `source/pbmsec/deb/opt/sophon/bmsec/binTools/socbak.zip`），再执行 `pbmsec/release.sh` 即可。
+
+依赖：`pandoc`、`dpkg-deb`。
+
+输出：`output/bmsec_v<version>.deb`。

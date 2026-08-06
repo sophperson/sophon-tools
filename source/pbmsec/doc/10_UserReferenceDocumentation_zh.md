@@ -721,17 +721,19 @@ config info:
         12. linaro:linaro@(172.16.150.16):22 -> 20026
         ```
 
-16. **将指定算力核心的环境进行打包，可选生成tftp刷机包和仅打半成品包 [sysbak \<id> \<localPath> [onlyBak]]**
+16. **将指定算力核心的环境进行打包，可选生成tftp刷机包或仅打半成品包 [sysbak \<id> \<localPath> [onlyBak]]**
     - 参数：
          - `<id>`：算力核心id，用于指定需要打包的算力核心
-         - `<localPath>`：打包存放在控制板的路径，需要有充足的空间（推荐大于等于需要打包的算力核心空间的1.5倍左右）
-         - `[onlyBak]`：可选参数，当该参数为`onlyBak`时用于指定只打包模式（降低对控制板资源耗用）
-    - 说明：通过此功能，用户可以批量修改算力核心的内存布局配置。
+         - `<localPath>`：打包存放在控制板的绝对路径，需要有充足的空间（推荐大于等于需要打包的算力核心空间的2.5倍左右）
+         - `[onlyBak]`：可选参数，传入`onlyBak`时仅备份分区镜像，不做刷机包
+    - 说明：在算力板上完成分区镜像备份并打包为tftp刷机包，主控板不再做包。`socbak.zip` 内置于 `bmsec/binTools/`，可独立替换升级：从 https://github.com/sophgo/sophon-tools/releases 下载最新 `socbak.zip`，替换 `/opt/sophon/bmsec/binTools/socbak.zip` 即可，无需重装 bmsec。
     - 命令行模式示例：`bmsec sysbak 7 /data/nfsBak/`
     - 交互式模式示例：输入`bmsec`后输入该功能的编号`16`，然后输入需要操作的算力核心编号，然后输入打包存放在控制板的路径。然后可选输入`onlyBak`字符串开启只打包模式
     - 注意事项：
-        - 默认使用打包`tftp`刷机包的模式，打包后的结果存放在指定路径下的`tftp`目录下，可替换`/recovery/tftp`后，重启`tftpd-hpa`服务，即可使用`update`功能刷机指定算力核心
-        - 而只打包模式可以节约控制板资源的占用（消耗与`socBak`工具相同）。打包出的文件需要经过`socBak`工具从**在X86机器上制作定制的系统包**这一步之后的操作才能重打包为tftp刷机包
+        - 默认打包`tftp`刷机包，结果存放在`<localPath>/socbak/output/tftp/`下，可替换`/recovery/tftp`后，重启`tftpd-hpa`服务，即可使用`update`功能刷机指定算力核心
+        - `onlyBak`模式仅备份分区镜像，结果存放在`<localPath>/socbak/output/`下，可节约资源占用
+        - 算力板上若有运行中的 docker 容器会拒绝执行，请先 `sudo docker stop $(sudo docker ps -q)` 后再运行
+        - 仅支持版本 3.0.0 以上（算力板上存在 `/system/data/buildinfo.txt`）的算力板
     - 输出示例:
     
         ``` bash
