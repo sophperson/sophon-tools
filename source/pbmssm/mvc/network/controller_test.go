@@ -13,6 +13,7 @@ import (
 	"bmssm/config"
 	"bmssm/middleware"
 	"bmssm/pkg/auth"
+	netpkg "bmssm/pkg/network"
 	"bmssm/pkg/response"
 )
 
@@ -35,7 +36,7 @@ func TestGetIPWithAuth(t *testing.T) {
 	api.Use(middleware.Auth())
 	api.GET("/network/ip", ctrl.GetIP)
 
-	secret := config.Conf.GetViper().GetString("server.authSecret")
+	secret := auth.EffectiveSecret(config.Conf.GetViper().GetString("server.authSecret"))
 	tokenStr, _, _ := auth.IssueToken("admin", secret, false)
 
 	w := httptest.NewRecorder()
@@ -85,7 +86,7 @@ func TestSetIPWithAuth(t *testing.T) {
 	api.Use(middleware.Auth())
 	api.PUT("/network/ip", ctrl.SetIP)
 
-	secret := config.Conf.GetViper().GetString("server.authSecret")
+	secret := auth.EffectiveSecret(config.Conf.GetViper().GetString("server.authSecret"))
 	tokenStr, _, _ := auth.IssueToken("admin", secret, false)
 
 	body, _ := json.Marshal(SetIPRequest{
@@ -129,7 +130,7 @@ func TestAddNATWithAuth(t *testing.T) {
 	api.Use(middleware.Auth())
 	api.POST("/network/nat", ctrl.AddNAT)
 
-	secret := config.Conf.GetViper().GetString("server.authSecret")
+	secret := auth.EffectiveSecret(config.Conf.GetViper().GetString("server.authSecret"))
 	tokenStr, _, _ := auth.IssueToken("admin", secret, false)
 
 	body, _ := json.Marshal(NatRequest{
@@ -158,5 +159,13 @@ func TestAddNATWithAuth(t *testing.T) {
 	}
 	if w.Code == http.StatusInternalServerError && resp.Code != 1 {
 		t.Fatalf("expected code=1, got %d body=%s", resp.Code, w.Body.String())
+	}
+
+	// 清理：添加成功时该测试在真实 nat 表里留下了一条规则（iptables 可用时），
+	// 必须删除，否则后续依赖 nat 表状态的测试（如 compat 的 DeleteNAT 校验）会被污染。
+	if w.Code == http.StatusOK {
+		t.Cleanup(func() {
+			_ = netpkg.AddNATRule(netpkg.NatRule{Direction: "in", Operation: "delete", Dst: "192.168.1.100", Src: "10.0.0.1"})
+		})
 	}
 }

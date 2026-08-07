@@ -48,7 +48,7 @@ func LoadFromDir(dir string) bool {
 	v.SetDefault("server.port", "9779")
 	v.SetDefault("server.auth", true)
 	v.SetDefault("server.listenIP", "")
-	v.SetDefault("server.authSecret", "bmssm-dev-secret")
+	v.SetDefault("server.authSecret", "") // 空 → 启动时随机生成并持久化（pkg/auth.EnsureSecret）
 	v.SetDefault("server.defaultPassword", "admin")
 	v.SetDefault("server.deviceName", "device_1")
 	v.SetDefault("log.level", "info")
@@ -66,6 +66,10 @@ func LoadFromDir(dir string) bool {
 
 	// OTA dryRun：true 时只记录不实刷（真机验证用，避免变砖/断 SSH）
 	v.SetDefault("ota.dryRun", false)
+
+	// 软件包/固件安装：autoRunScript 默认 false，拒绝自动执行包内脚本
+	// （tar.gz/zip 的 install.sh、.deb 的 dpkg 维护脚本），防上传即 root RCE。
+	v.SetDefault("software.autoRunScript", false)
 
 	// Prometheus metrics 后台采集
 	v.SetDefault("metrics.enabled", true)

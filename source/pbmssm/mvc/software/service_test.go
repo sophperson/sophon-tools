@@ -365,9 +365,9 @@ func TestExtractTarGzRejectsSymlink(t *testing.T) {
 
 func TestInstallPackageTarGz(t *testing.T) {
 	src := createTestTarGz(t, map[string]string{
-		"bin/":     "",
-		"bin/app":  "#!/bin/sh\necho hello",
-		"VERSION":  "1.0.0\n",
+		"bin/":    "",
+		"bin/app": "#!/bin/sh\necho hello",
+		"VERSION": "1.0.0\n",
 	})
 	root := t.TempDir()
 	svc := NewSoftwareService(root, t.TempDir(), t.TempDir(), DefaultMaxSize)
@@ -401,6 +401,11 @@ func TestInstallPackageTarGz(t *testing.T) {
 }
 
 func TestInstallPackageTarGzWithInstallScript(t *testing.T) {
+	// 测试显式开启包内脚本自动执行
+	old := autoRunScript
+	autoRunScript = func() bool { return true }
+	defer func() { autoRunScript = old }()
+
 	src := createTestTarGz(t, map[string]string{
 		"install.sh": "#!/bin/sh\necho 'install script ran'",
 	})
@@ -451,6 +456,58 @@ func TestInstallPackageUnsupportedFormat(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsupported") {
 		t.Errorf("expected 'unsupported' in error, got: %v", err)
+	}
+}
+
+// Y1：autoRunScript 默认关闭时 .deb 不得执行 dpkg -i（其维护脚本以 root 运行）。
+func TestInstallDebGatedByAutoRunScript(t *testing.T) {
+	// PATH 注入假的 dpkg：被调用就写标记文件（模拟执行了维护脚本）
+	marker := filepath.Join(t.TempDir(), "dpkg-called")
+	binDir := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + marker + "'\n"
+	if err := os.WriteFile(filepath.Join(binDir, "dpkg"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	deb := filepath.Join(t.TempDir(), "pkg.deb")
+	if err := os.WriteFile(deb, []byte("fake deb"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 默认关闭：拒绝安装，不调用 dpkg
+	svc := NewSoftwareService(t.TempDir(), t.TempDir(), t.TempDir(), DefaultMaxSize)
+	resp, err := svc.InstallPackage(deb, "pkg.deb")
+	if err != nil {
+		t.Fatalf("InstallPackage: %v", err)
+	}
+	if resp.Success {
+		t.Fatalf("deb install must be rejected when autoRunScript disabled: %+v", resp)
+	}
+	if !strings.Contains(resp.Message, "autoRunScript") {
+		t.Errorf("message should mention autoRunScript: %q", resp.Message)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Error("dpkg must not be invoked when autoRunScript disabled")
+	}
+
+	// 显式开启：允许安装
+	old := autoRunScript
+	autoRunScript = func() bool { return true }
+	defer func() { autoRunScript = old }()
+	resp, err = svc.InstallPackage(deb, "pkg.deb")
+	if err != nil {
+		t.Fatalf("InstallPackage (enabled): %v", err)
+	}
+	if !resp.Success {
+		t.Fatalf("deb install should succeed when autoRunScript enabled: %+v", resp)
+	}
+	data, err := os.ReadFile(marker)
+	if err != nil || !strings.Contains(string(data), "-i") {
+		t.Errorf("dpkg -i should have been invoked, marker=%q err=%v", string(data), err)
 	}
 }
 
@@ -561,6 +618,11 @@ func TestGetFirmwareInfoNotFound(t *testing.T) {
 // ----------------------------------------------------------------
 
 func TestExecuteUpgradeWithScript(t *testing.T) {
+	// 测试显式开启固件脚本自动执行
+	old := autoRunScript
+	autoRunScript = func() bool { return true }
+	defer func() { autoRunScript = old }()
+
 	// 创建含 upgrade.sh 的固件 tar.gz
 	fwContent := map[string]string{
 		"upgrade.sh": "#!/bin/sh\necho 'upgrade done'",
@@ -624,9 +686,14 @@ func TestExecuteUpgradeNoScriptDegraded(t *testing.T) {
 }
 
 func TestExecuteUpgradeWithInstallShInSubdir(t *testing.T) {
+	// 测试显式开启固件脚本自动执行
+	old := autoRunScript
+	autoRunScript = func() bool { return true }
+	defer func() { autoRunScript = old }()
+
 	// 固件包中 install.sh 在子目录中
 	fwContent := map[string]string{
-		"bootloader/":          "",
+		"bootloader/":           "",
 		"bootloader/install.sh": "#!/bin/sh\necho 'bootloader install ok'",
 	}
 	fwPath := createTestTarGz(t, fwContent)

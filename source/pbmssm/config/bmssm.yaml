@@ -2,7 +2,8 @@ server:
   listenIP: ""
   port: 9779
   auth: true
-  authSecret: "bmssm-dev-secret"
+  # authSecret 留空：启动时生成随机 32 字节 JWT secret 持久化到
+  # /var/lib/bmssm/jwt_secret（见 pkg/auth.EnsureSecret）。显式配置会覆盖。
   defaultPassword: "admin"
   deviceName: "device_1"
 log:
@@ -38,3 +39,6 @@ firewall:
   persistPath: /etc/iptables/rules.v4
   rollbackSeconds: 300
   protectPorts: []
+software:
+  autoRunScript: false   # 默认 false：禁止自动执行包内脚本（tar.gz/zip 的 install.sh、
+                         # .deb 的 dpkg 维护脚本），防上传即 root RCE；需安装软件时置 true
