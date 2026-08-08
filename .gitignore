@@ -16,6 +16,8 @@ output/*
 *.tar
 *.tar.gz
 *.AppImage
+# dfss 私有工具链归档（从 13.24 容器导出，体积大，不入库）
+docker/toolchains/
 
 
 # Model file
