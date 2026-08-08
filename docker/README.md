@@ -8,6 +8,10 @@
 合并为**一个 ubuntu:20.04 基座镜像** `sophon-tools-build:unified`，全部 16 个子项目在单镜像内构建，
 不再按子项目切换镜像。
 
+**镜像体积**：完整镜像（内置 dfss sw_64/loongarch64、Qt mingw 静态库、pSophUI aarch64 交叉工具链）
+约 **10GB**（`docker images` 显示 ~10.1GB，实际层内容 ~9.4GB）。体积增大是单镜像方案的预期取舍
+——换取构建期零镜像切换、一键全量。
+
 ## 一条命令构建镜像
 
 ```bash
