@@ -2,15 +2,15 @@
 # sophon-tools-build 镜像自检（对照 M1 盘点清单逐项验证工具链）
 #
 # 用法:
-#   bash docker/verify.sh                 # 默认镜像 sophon-tools-build:latest
+#   bash docker/verify.sh                 # 默认镜像 sophon-tools-build:unified
 #   bash docker/verify.sh --image <name>  # 指定镜像
-#   bash docker/verify.sh --cross         # 额外跑交叉编译实测(arm64 musl 静态 + windows)
+#   bash docker/verify.sh --cross         # 额外跑交叉编译实测(arm64 musl 静态 + windows + pqt + pSophUI)
 #
 # 退出码: 0=全部通过, 1=存在失败项
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-IMAGE="${IMAGE:-sophon-tools-build:latest}"
+IMAGE="${IMAGE:-sophon-tools-build:unified}"
 DO_CROSS=0
 
 while [[ $# -gt 0 ]]; do
@@ -44,7 +44,8 @@ VERSION() {
 
 echo "== sophon-tools-build 镜像自检 ($IMAGE) =="
 
-echo "--- 基础工具链 ---"
+echo "--- 基座 / 基础工具链 ---"
+VERSION "glibc (基座)"          "ldd --version | head -1"
 VERSION "gcc (host)"            "gcc --version | head -1"
 VERSION "g++ (host)"            "g++ --version | head -1"
 VERSION "make"                  "make --version | head -1"
@@ -91,6 +92,18 @@ else
   echo "  [SKIP] dfss 私有工具链未内置(基础镜像; 用 --with-dfss-toolchains 重建)"
 fi
 
+echo "--- pqt 系列 (AppImage + windows exe) ---"
+VERSION "qmake (Qt5)"           "qmake --version 2>/dev/null | tail -1"
+CHECK  "libgl1-mesa-dev"        "test -f /usr/include/GL/gl.h"
+CHECK  "fuse"                   "ls /usr/lib/x86_64-linux-gnu/libfuse* >/dev/null 2>&1"
+CHECK  "Qt mingw 静态库"        "test -f /opt/qt-mingw/lib/libQt5Widgets.a"
+CHECK  "mingw posix g++"        "command -v x86_64-w64-mingw32-g++-posix"
+
+echo "--- pSophUI (aarch64 Qt 5.12.8 交叉) ---"
+VERSION "aarch64 Qt qmake"      "/env/qt_5.12.8_nosysroot/bin/qmake --version 2>/dev/null | tail -1"
+VERSION "Linaro aarch64 gcc"    "/env/gcc-linaro-6.3.1-2017.05-x86_64_aarch64-linux-gnu/bin/aarch64-linux-gnu-gcc --version | head -1"
+CHECK  "sophui-check"           "sophui-check | grep -q '已就绪'"
+
 echo "--- 打包 / 文档 / 验证工具 ---"
 CHECK  "dpkg-deb"               "dpkg-deb --version"
 CHECK  "dpkg-dev"               "dpkg-buildpackage --version | head -1"
@@ -102,13 +115,15 @@ CHECK  "patchelf"               "patchelf --version"
 CHECK  "pandoc"                 "pandoc --version | head -1"
 CHECK  "sudo"                   "sudo --version | head -1"
 CHECK  "qemu-aarch64-static"    "qemu-aarch64-static --version | head -1"
-CHECK  "qemu-loongarch64"       "qemu-loongarch64 --version | head -1"
+# ubuntu:20.04 仓库含 loongarch64 模拟器静态版 (qemu-loongarch64-static)
+CHECK  "qemu-loongarch64-static" "qemu-loongarch64-static --version | head -1"
 
 # ---- 交叉编译实测 ----
 if [[ "${DO_CROSS}" = "1" ]]; then
   echo "--- 交叉编译实测 ---"
-  # C: aarch64 musl 静态
-  if run 'printf "int main(){return 0;}\n" > /tmp/c.c && aarch64-linux-musl-gcc -static /tmp/c.c -o /tmp/c.out && file /tmp/c.out | grep -qE "statically linked|static-pie linked"'; then
+  # C: aarch64 musl 静态 (musl gcc 默认产出 static-PIE, file 会显示 dynamically linked,
+  #    判据改为: 编译成功 且 无 INTERP 段 即真静态)
+  if run 'printf "int main(){return 0;}\n" > /tmp/c.c && aarch64-linux-musl-gcc -static /tmp/c.c -o /tmp/c.out && ! readelf -l /tmp/c.out | grep -q INTERP'; then
     echo "  [PASS] C aarch64 musl 静态编译"
   else
     echo "  [FAIL] C aarch64 musl 静态编译"
@@ -147,6 +162,31 @@ if [[ "${DO_CROSS}" = "1" ]]; then
       echo "  [PASS] loongarch64 静态交叉编译"
     else
       echo "  [FAIL] loongarch64 静态交叉编译"
+      FAIL=1
+    fi
+  fi
+  # pqt: 宿主机 Qt5 qmake 能编译 AppImage 依赖(简单 Qt 程序)
+  if run 'mkdir -p /tmp/qt && cd /tmp/qt && printf "QT += core\nCONFIG += console c++11\nSOURCES += main.cpp\n" > t.pro && printf "#include <QCoreApplication>\nint main(int argc,char**argv){QCoreApplication a(argc,argv);return 0;}\n" > main.cpp && qmake t.pro >/dev/null 2>&1 && make -s -j2 >/dev/null 2>&1 && test -x t'; then
+    echo "  [PASS] pqt 宿主机 Qt5 qmake 编译"
+  else
+    echo "  [FAIL] pqt 宿主机 Qt5 qmake 编译"
+    FAIL=1
+  fi
+  # pqt: windows Qt mingw 交叉(若有 Qt 静态库) —— 用与 build-pqt.sh 相同的 CMake 流程
+  if run '[ -f /opt/qt-mingw/lib/libQt5Widgets.a ]'; then
+    if run 'mkdir -p /opt/mingw-posix/bin && for t in gcc g++ cpp cc c++ gcc-ar gcc-nm gcc-ranlib; do [ -x /usr/bin/x86_64-w64-mingw32-${t}-posix ] && ln -sf /usr/bin/x86_64-w64-mingw32-${t}-posix /opt/mingw-posix/bin/x86_64-w64-mingw32-${t}; done && export PATH=/opt/mingw-posix/bin:$PATH && mkdir -p /tmp/mingw-inc && ln -sf /usr/x86_64-w64-mingw32/include/winsock2.h /tmp/mingw-inc/Winsock2.h && ln -sf /usr/x86_64-w64-mingw32/lib/libws2_32.a /usr/x86_64-w64-mingw32/lib/libWS2_32.a && mkdir -p /tmp/qtwin && cd /tmp/qtwin && printf "cmake_minimum_required(VERSION 3.10)\nproject(qttest CXX)\nset(CMAKE_CXX_STANDARD 11)\nfind_package(Qt5 REQUIRED COMPONENTS Core)\nadd_executable(qtmain main.cpp)\ntarget_link_libraries(qtmain Qt5::Core)\n" > CMakeLists.txt && printf "#include <QCoreApplication>\nint main(int argc,char**argv){QCoreApplication a(argc,argv);return 0;}\n" > main.cpp && printf "set(CMAKE_SYSTEM_NAME Windows)\nset(CMAKE_SYSTEM_PROCESSOR x86_64)\nset(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc)\nset(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++)\nset(CMAKE_FIND_ROOT_PATH /opt/qt-mingw /usr/x86_64-w64-mingw32)\nset(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)\nset(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)\nset(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)\n" > tc.cmake && export QT_PLATFORM_DIR=/opt/qt-mingw && export QT_GCC_PLATFORM_DIR=/opt/mingw-posix/bin && mkdir -p build-win && cd build-win && cmake .. -DCMAKE_TOOLCHAIN_FILE=/tmp/qtwin/tc.cmake -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CXX_FLAGS=-I/tmp/mingw-inc" >/dev/null 2>&1 && make -s -j2 >/dev/null 2>&1 && file qtmain.exe | grep -qE "PE32\+.*x86-64"'; then
+      echo "  [PASS] pqt windows Qt mingw 交叉编译"
+    else
+      echo "  [FAIL] pqt windows Qt mingw 交叉编译"
+      FAIL=1
+    fi
+  fi
+  # pSophUI: aarch64 Qt qmake 生成 Makefile + Linaro gcc 可编译(若有交叉 Qt)
+  if run '[ -x /env/qt_5.12.8_nosysroot/bin/qmake ]'; then
+    if run 'export QMAKESPEC=/env/qt_5.12.8_nosysroot/mkspecs/linux-aarch64-gnu-g++ && export PATH=/env/qt_5.12.8_nosysroot/bin:/env/gcc-linaro-6.3.1-2017.05-x86_64_aarch64-linux-gnu/bin:$PATH && mkdir -p /tmp/pu && cd /tmp/pu && printf "QT += core gui widgets\nCONFIG += c++11\nSOURCES += main.cpp\n" > s.pro && printf "#include <QApplication>\nint main(int argc,char**argv){QApplication a(argc,argv);return 0;}\n" > main.cpp && qmake s.pro >/dev/null 2>&1 && make -s -j2 >/dev/null 2>&1 && file s | grep -q aarch64'; then
+      echo "  [PASS] pSophUI aarch64 Qt 交叉编译"
+    else
+      echo "  [FAIL] pSophUI aarch64 Qt 交叉编译"
       FAIL=1
     fi
   fi
