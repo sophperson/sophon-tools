@@ -1,0 +1,82 @@
+#!/bin/bash
+# pSophUI 统一构建接口 (M1 规范 v0.1)
+# 用法: bash release.sh [ARCH] [VERSION]
+#   ARCH:    arm64（默认，设备 HDMI）
+#   VERSION: 显式版本号（默认从 deb control 提取 1.6.8）
+#   env OUTPUT_DIR: 产物目录（默认 <repo>/output/pSophUI/）
+#   env QT_CROSS_PREFIX: aarch64 Qt 交叉安装前缀
+#     默认 /env/qt_5.12.8_nosysroot（13.24 cross_build_sophon_u20 容器同款）
+#   env CROSS_PREFIX: aarch64 交叉编译器前缀
+#     默认 /env/gcc-linaro-6.3.1-2017.05-x86_64_aarch64-linux-gnu（Linaro GCC 6.3）
+# 说明: 工程自带 lxqt qtermwidget arm64 静态库 + Makefile 为 qmake 生成物。
+#       本脚本用 qmake 重新生成 Makefile（消除 /env/qt_fl2000 绝对路径依赖），
+#       再 make 出 arm64 二进制并打 deb。
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ARCH="${1:-arm64}"
+OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/output/pSophUI}"
+
+# 版本号默认从 deb control 提取（sophgo-hdmi_1.6.8_arm64.deb）
+VERSION="${2:-$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' "$SCRIPT_DIR/SophUI/deb/DEBIAN/control" 2>/dev/null | head -1)}"
+VERSION="${VERSION:-1.6.8}"
+
+QT_CROSS_PREFIX="${QT_CROSS_PREFIX:-/env/qt_5.12.8_nosysroot}"
+CROSS_PREFIX="${CROSS_PREFIX:-/env/gcc-linaro-6.3.1-2017.05-x86_64_aarch64-linux-gnu}"
+
+QMAKE="$QT_CROSS_PREFIX/bin/qmake"
+CROSS_GCC="$CROSS_PREFIX/bin/aarch64-linux-gnu-gcc"
+
+if [ "$ARCH" != "arm64" ]; then
+  echo "ERROR: pSophUI 仅支持 arm64（设备 HDMI 交叉编译）" >&2
+  exit 1
+fi
+if [ ! -x "$QMAKE" ]; then
+  echo "ERROR: 未找到 aarch64 Qt qmake: $QMAKE" >&2
+  echo "       需要交叉 Qt 环境（13.24 cross_build_sophon_u20: /env/qt_5.12.8_nosysroot）" >&2
+  exit 2
+fi
+
+mkdir -p "$OUTPUT_DIR"
+echo "==> pSophUI build arch=arm64 version=$VERSION (qmake=$QMAKE)"
+
+BUILD_DIR="$SCRIPT_DIR/SophUI"
+pushd "$BUILD_DIR" >/dev/null
+
+  export PATH="$QT_CROSS_PREFIX/bin:$CROSS_PREFIX/bin:$PATH"
+  export QMAKESPEC="${QT_CROSS_PREFIX}/mkspecs/linux-aarch64-gnu-g++"
+
+  # 重新生成 Makefile（消除 Makefile 里硬编码的 /env/qt_fl2000 路径）
+  rm -f Makefile
+  "$QMAKE" SophUI.pro
+
+  # 编译（post-link 的 upx 步骤失败仅告警，不影响二进制产出）
+  make -j"$(nproc)" 2>&1 | tail -5 || {
+    echo "WARN: make 有非零退出（多为尾部 upx 缺失），检查二进制是否已生成" >&2
+  }
+
+  BIN="SophUI"
+  if [ ! -f "$BIN" ]; then
+    echo "ERROR: 未生成 $BIN" >&2
+    exit 1
+  fi
+  file "$BIN" | head -1
+
+  # 打 deb（复用工程内 deb 数据树）
+  if [ -d deb ] && command -v dpkg-deb >/dev/null 2>&1; then
+    DEST_DIR=deb/opt/sophon/SophUI/bin
+    mkdir -p "$DEST_DIR"
+    cp -f "$BIN" "$DEST_DIR/"
+    DEST_VER="${VERSION}"
+    sed -i "s/1\.6\.8/${DEST_VER}/" deb/DEBIAN/control 2>/dev/null || true
+    dpkg-deb --root-owner-group -b deb "$OUTPUT_DIR/sophgo-hdmi_${DEST_VER}_arm64.deb" 2>&1 | tail -2 || true
+    cp -f "$BIN" "$OUTPUT_DIR/SophUI_arm64"
+  else
+    cp -f "$BIN" "$OUTPUT_DIR/SophUI_arm64"
+  fi
+
+popd >/dev/null
+
+echo "==> pSophUI 完成, 产物: $OUTPUT_DIR"
+ls -la "$OUTPUT_DIR"

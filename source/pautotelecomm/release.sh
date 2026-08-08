@@ -1,6 +1,18 @@
 #!/bin/bash
+# pautotelecomm 统一构建接口 (M1 规范 v0.1)
+# 用法: bash release.sh [ARCH] [VERSION]
+#   ARCH:    arm64（默认，设备 SE5/7/9）
+#   VERSION: 显式版本号（默认 1.2.8）
+#   env OUTPUT_DIR: 产物目录（默认 <repo>/output/pautotelecomm/）
+set -euo pipefail
 
-VERSION=1.2.8
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ARCH="${1:-arm64}"
+VERSION="${2:-1.2.8}"
+OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/output/pautotelecomm}"
+
+echo "==> pautotelecomm build arch=$ARCH version=$VERSION"
 rm -rf output
 mkdir -p output
 
@@ -56,3 +68,8 @@ tar -caf output/packages.tgz rootfs kernel
 cat output/packages.tgz >> output/autotelecomm_install_${VERSION}.sh
 
 chmod +x output/autotelecomm_install_${VERSION}.sh
+
+mkdir -p "$OUTPUT_DIR"
+cp output/autotelecomm_install_${VERSION}.sh "$OUTPUT_DIR/"
+echo "==> pautotelecomm 完成, 产物: $OUTPUT_DIR"
+ls -la "$OUTPUT_DIR"

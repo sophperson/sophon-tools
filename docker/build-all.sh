@@ -1,17 +1,27 @@
 #!/usr/bin/env bash
-# sophon-tools-build 统一构建全部 17 子项目（镜像内一键编译）
+# sophon-tools-build 统一构建全部子项目（镜像内一键编译）
 #
 # 目标: 在 sophon-tools-build 镜像内预装工具链, 对全部子项目执行所有平台的编译。
-# 本脚本是统一入口, 按 M1 规范驱动每个子项目的构建脚本。
+# 本脚本是统一入口, 按 M1 规范驱动每个子项目的 release.sh（统一接口）。
+#
+# 统一接口 (M1 规范 v0.1):
+#   bash release.sh [ARCH] [VERSION]
+#     ARCH:    arm64 | amd64 | all（默认按子项目）
+#     VERSION: 显式版本号（缺省用子项目版本来源）
+#     env OUTPUT_DIR: 覆盖产物目录（默认 <repo>/output/<子项目>/）
+#
+# 范围: 16 个子项目（pmulti_video_qt 已按 MYSWY 决定排除）
 #
 # 用法:
-#   bash docker/build-all.sh                    # 构建全部 17 子项目(默认平台)
+#   bash docker/build-all.sh                    # 构建全部子项目(默认平台)
 #   bash docker/build-all.sh --project pbmssm   # 只构建指定子项目
 #   bash docker/build-all.sh --arch arm64       # 只构建指定架构
 #   bash docker/build-all.sh --image sophon-tools-build:m2
+#   bash docker/build-all.sh --version 2.1.0    # 统一显式版本号（透传给所有 release.sh）
 #   bash docker/build-all.sh --list             # 列出子项目与平台
 #
 # 产物: 全部汇聚到仓库根 output/<子项目>/ (与根 release.sh 一致)
+# 失败隔离: 单子项目失败不影响其他项目，结束后汇总 PASS/FAIL，非零退出码。
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -21,40 +31,42 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 IMAGE="${IMAGE:-sophon-tools-build:m2}"
 ONLY_PROJECT=""
 ONLY_ARCH=""
+BUILD_VERSION=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --project) ONLY_PROJECT="$2"; shift 2; continue ;;
     --arch) ONLY_ARCH="$2"; shift 2; continue ;;
     --image) IMAGE="$2"; shift 2; continue ;;
+    --version) BUILD_VERSION="$2"; shift 2; continue ;;
     --list) LIST_ONLY=1 ;;
-    -h|--help) grep -E '^#' "$0" | sed 's/^# \{0,1\}//' | head -25; exit 0 ;;
+    -h|--help) grep -E '^#' "$0" | sed 's/^# \{0,1\}//' | head -40; exit 0 ;;
     *) echo "未知参数: $1" >&2; exit 1 ;;
   esac
   shift
 done
 
-# 子项目 -> 构建脚本/命令 (镜像内相对 source/<项目>/ 执行)
-declare -A PROJECTS
-PROJECTS[pbmssm]="bash build/build-deb-bmssm.sh 2.1.0 ${ONLY_ARCH:-arm64}"
-PROJECTS[psophliteos]="cd frontend && rm -rf node_modules && CI=true pnpm install --no-frozen-lockfile 2>/dev/null; cd .. && bash build/build-deb-sophliteos.sh 2.1.0 soc"
-PROJECTS[pbmsec]="bash release.sh"
-PROJECTS[psocbak]="bash release.sh"
-PROJECTS[pget_info]="bash release.sh"
-PROJECTS[pmem_aging_test]="bash release.sh"
-PROJECTS[pmemory_edit]="bash release.sh"
-PROJECTS[pota_update]="bash release.sh"
-PROJECTS[pautotelecomm]="bash release.sh"
-PROJECTS[pbm_set_ip]="cd bm_set_ip && cargo build --target aarch64-unknown-linux-musl --release"
-PROJECTS[pdfss_cpp]="bash linux_release.sh ${ONLY_ARCH:-host}"
-PROJECTS[pqt_batch_deployment]="bash docker/pqt/build-pqt.sh --project pqt_batch_deployment --linux"
-PROJECTS[pqt_memory_edit]="bash docker/pqt/build-pqt.sh --project pqt_memory_edit --linux"
-PROJECTS[pSophUI]="echo 'SKIP: 需交叉 Qt 环境(M3)'"
-PROJECTS[pmulti_video_qt]="echo 'SKIP: 需 libsophon SDK(M3)'"
-PROJECTS[psoph_phytool]="cp sophon_phytool.sh output/"
-PROJECTS[pspacc_efuse_demo]="gcc -o output/spacc_efuse_demo spacc_efuse_demo.c"
+# 子项目 -> 默认平台 (release.sh 的第一参数 ARCH)
+declare -A DEFAULT_ARCH
+DEFAULT_ARCH[pbmssm]=arm64
+DEFAULT_ARCH[psophliteos]=arm64
+DEFAULT_ARCH[pbmsec]=all
+DEFAULT_ARCH[psocbak]=arm64
+DEFAULT_ARCH[pget_info]=amd64
+DEFAULT_ARCH[pmem_aging_test]=arm64
+DEFAULT_ARCH[pmemory_edit]=arm64
+DEFAULT_ARCH[pota_update]=arm64
+DEFAULT_ARCH[pautotelecomm]=arm64
+DEFAULT_ARCH[pbm_set_ip]=arm64
+DEFAULT_ARCH[pdfss_cpp]=host
+DEFAULT_ARCH[pqt_batch_deployment]=amd64
+DEFAULT_ARCH[pqt_memory_edit]=amd64
+DEFAULT_ARCH[pSophUI]=arm64
+# pmulti_video_qt: 按 MYSWY 决定（2026-08-08）不需要做，从统一构建范围排除
+DEFAULT_ARCH[psoph_phytool]=all
+DEFAULT_ARCH[pspacc_efuse_demo]=amd64
 
-# 平台说明 (M1 盘点)
+# 子项目 -> 平台说明 (M1 盘点)
 declare -A PLATFORMS
 PLATFORMS[pbmssm]="arm64(musl静态)/amd64"
 PLATFORMS[psophliteos]="arm64(musl静态)/amd64"
@@ -65,60 +77,158 @@ PLATFORMS[pmem_aging_test]="arm64"
 PLATFORMS[pmemory_edit]="arm64"
 PLATFORMS[pota_update]="arm64"
 PLATFORMS[pautotelecomm]="arm64"
-PLATFORMS[pbm_set_ip]="arm64(musl静态)"
+PLATFORMS[pbm_set_ip]="arm64(musl静态)/amd64"
 PLATFORMS[pdfss_cpp]="amd64/arm64/armbi/loongarch64/riscv64/sw_64/win-amd64/win-i686"
 PLATFORMS[pqt_batch_deployment]="amd64/arm64"
 PLATFORMS[pqt_memory_edit]="amd64/arm64 + windows"
-PLATFORMS[pSophUI]="arm64(需交叉Qt)"
-PLATFORMS[pmulti_video_qt]="arm64(需SDK)"
+PLATFORMS[pSophUI]="arm64(交叉Qt)"
 PLATFORMS[psoph_phytool]="通用脚本"
 PLATFORMS[pspacc_efuse_demo]="amd64/arm64"
 
+# 子项目 -> 专用镜像覆盖（默认用统一镜像 sophon-tools-build）
+#   pqt 系列: linux AppImage 需 glibc<=2.31 -> pqt 专用 20.04 镜像
+#   pSophUI: 需 aarch64 Qt 交叉工具链 -> cross_build_sophon_u20 (13.24 同款)
+declare -A IMAGE_OVERRIDES
+IMAGE_OVERRIDES[pqt_batch_deployment]="${PQT_IMAGE:-sophon-tools-build-pqt:latest}"
+IMAGE_OVERRIDES[pqt_memory_edit]="${PQT_IMAGE:-sophon-tools-build-pqt:latest}"
+IMAGE_OVERRIDES[pSophUI]="${CROSS_QT_IMAGE:-cross_build_sophon_u20:v1}"
+
+# 宿主执行项目（不在容器内跑 release.sh）：
+#   pqt 系列 release.sh 内部调用 docker/pqt/build-pqt.sh，后者用 docker 起 pqt 专用容器，
+#   因此必须在宿主（有 docker）直接执行 release.sh，而非在容器内嵌套 docker。
+declare -A HOST_RUN
+HOST_RUN[pqt_batch_deployment]=1
+HOST_RUN[pqt_memory_edit]=1
+
+# 子项目 -> 额外环境 (镜像内 export; 以 ; 分隔)
+declare -A EXTRA_ENV
+EXTRA_ENV[pbm_set_ip]="export PATH=\${HOME}/.cargo/bin:/opt/cargo/bin:\$PATH"
+EXTRA_ENV[psophliteos]="export PATH=/opt/nodejs/bin:/opt/go/bin:\$PATH"
+EXTRA_ENV[pbmssm]="export PATH=/opt/go/bin:\$PATH"
+EXTRA_ENV[pdfss_cpp]="export PATH=/env/loongson-gnu-toolchain-8.3-x86_64-loongarch64-linux-gnu-rc1.1/bin:/usr/sw/swgcc830_cross_tools/usr/bin:\$PATH"
+EXTRA_ENV[pSophUI]="export PATH=/env/qt_5.12.8_nosysroot/bin:/env/gcc-linaro-6.3.1-2017.05-x86_64_aarch64-linux-gnu/bin:\$PATH; export QMAKESPEC=/env/qt_5.12.8_nosysroot/mkspecs/linux-aarch64-gnu-g++"
+
 if [[ "${LIST_ONLY:-0}" = "1" ]]; then
-  echo "=== sophon-tools 17 子项目构建清单 (镜像 ${IMAGE}) ==="
-  for p in $(echo "${!PROJECTS[@]}" | tr ' ' '\n' | sort); do
-    printf "  %-22s 平台: %s\n" "$p" "${PLATFORMS[$p]}"
+  echo "=== sophon-tools 16 子项目构建清单（pmulti_video_qt 已排除） ==="
+  for p in $(echo "${!DEFAULT_ARCH[@]}" | tr ' ' '\n' | sort); do
+    img="${IMAGE_OVERRIDES[$p]:-$IMAGE}"
+    printf "  %-22s 平台: %-40s 镜像: %s\n" "$p" "${PLATFORMS[$p]}" "$img"
   done
   exit 0
 fi
 
 # 输出目录
 mkdir -p "${REPO_ROOT}/output"
-echo "==> 统一构建 (镜像 ${IMAGE}), 输出: ${REPO_ROOT}/output"
+echo "==> 统一构建, 输出: ${REPO_ROOT}/output"
+
+# 各子项目构建结果（失败隔离汇总）: "<项目>|<退出码>"
+RESULTS=()
 
 run_one() {
   local p="$1"
+  local arch="${ONLY_ARCH:-${DEFAULT_ARCH[$p]}}"
+  local img="${IMAGE_OVERRIDES[$p]:-$IMAGE}"
   echo ""
-  echo "========== [${p}] 平台: ${PLATFORMS[$p]} =========="
+  echo "========== [${p}] 平台: ${PLATFORMS[$p]} arch=${arch} 镜像: ${img} =========="
   local src_dir="${REPO_ROOT}/source/${p}"
-  [[ -d "${src_dir}" ]] || { echo "  [SKIP] 目录不存在: ${src_dir}"; return 0; }
-  mkdir -p "${src_dir}/output"
-  local cmd="${PROJECTS[$p]}"
-  docker run --rm --privileged \
-    -v /dev:/dev \
-    -v "${REPO_ROOT}":/workspace/sophon-tools \
-    -w "/workspace/sophon-tools/source/${p}" \
-    "${IMAGE}" bash -c "
-      set -e
-      git config --global --add safe.directory '*' 2>/dev/null || true
-      git config --global --add safe.directory /workspace/sophon-tools 2>/dev/null || true
-      export PATH=\"/env/loongson-gnu-toolchain-8.3-x86_64-loongarch64-linux-gnu-rc1.1/bin:/usr/sw/swgcc830_cross_tools/usr/bin:\$PATH\"
-      mkdir -p output
-      echo '  >> ${cmd}'
-      ${cmd} 2>&1 | tail -15
-    " 2>&1 | sed 's/^/    /'
-  local rc=${PIPESTATUS[0]}
-  echo "  [${p}] 退出码: ${rc}"
+  if [[ ! -d "${src_dir}" ]]; then
+    echo "  [SKIP] 目录不存在: ${src_dir}"
+    RESULTS+=("${p}|skip")
+    return 0
+  fi
+
+  local rc=0
+  # pqt 系列在宿主直接执行 release.sh（内部需要 docker 起专用容器）
+  if [[ "${HOST_RUN[$p]:-0}" = "1" ]]; then
+    (
+      cd "${src_dir}"
+      echo "  >> (宿主) bash release.sh ${arch} ${BUILD_VERSION}"
+      OUTPUT_DIR="${REPO_ROOT}/output/${p}" bash release.sh "${arch}" ${BUILD_VERSION} 2>&1 | tail -20
+    ) | sed 's/^/    /'
+    rc=${PIPESTATUS[0]}
+    echo "  [${p}] 退出码: ${rc}"
+  else
+    local extra_env="${EXTRA_ENV[$p]:-}"
+    docker run --rm --privileged \
+      -v /dev:/dev \
+      -v "${REPO_ROOT}":/workspace/sophon-tools \
+      -w "/workspace/sophon-tools/source/${p}" \
+      -e OUTPUT_DIR="/workspace/sophon-tools/output/${p}" \
+      "${img}" bash -c "
+        set -euo pipefail
+        git config --global --add safe.directory '*' 2>/dev/null || true
+        git config --global --add safe.directory /workspace/sophon-tools 2>/dev/null || true
+        ${extra_env}
+        echo '  >> bash release.sh ${arch} ${BUILD_VERSION}'
+        bash release.sh ${arch} ${BUILD_VERSION} 2>&1 | tail -20
+      " 2>&1 | sed 's/^/    /'
+    rc=${PIPESTATUS[0]}
+    echo "  [${p}] 退出码: ${rc}"
+  fi
+
+  if [[ "${rc}" = "0" ]]; then
+    RESULTS+=("${p}|ok")
+  else
+    RESULTS+=("${p}|fail:${rc}")
+  fi
 }
 
 if [[ -n "${ONLY_PROJECT}" ]]; then
   run_one "${ONLY_PROJECT}"
 else
-  for p in $(echo "${!PROJECTS[@]}" | tr ' ' '\n' | sort); do
+  for p in $(echo "${!DEFAULT_ARCH[@]}" | tr ' ' '\n' | sort); do
     run_one "$p"
   done
 fi
 
+# ---- 构建后清理：pSophUI 的 qmake 会在源码树内重生成 Makefile 并留下编译产物 ----
+# Makefile 是 qmake 生成物（仓库内为旧版 /env/qt_fl2000 路径），构建时被重写。
+# 为避免每次全量 release 弄脏工作区，构建后恢复仓库内 Makefile 并移除编译产物。
+# 产物由容器内 root 创建，清理时优先 sudo（与根 release.sh 旧版一致），无 sudo 则尽力而为。
+if [[ -z "${ONLY_PROJECT}" || "${ONLY_PROJECT}" = "pSophUI" ]]; then
+  pui="${REPO_ROOT}/source/pSophUI/SophUI"
+  if [[ -d "${pui}" ]]; then
+    git -C "${REPO_ROOT}" checkout -- "source/pSophUI/SophUI/Makefile" 2>/dev/null || true
+    if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+      sudo rm -rf "${pui}"/.qmake.stash \
+                  "${pui}"/Makefile.Debug \
+                  "${pui}"/Makefile.Release \
+                  "${pui}"/release \
+                  "${pui}"/ui_mainwindow.h 2>/dev/null || true
+      sudo rm -f "${pui}/SophUI" 2>/dev/null || true
+      sudo rm -rf "${pui}/deb/opt" 2>/dev/null || true
+    else
+      rm -rf "${pui}"/.qmake.stash \
+             "${pui}"/Makefile.Debug \
+             "${pui}"/Makefile.Release \
+             "${pui}"/release \
+             "${pui}"/ui_mainwindow.h 2>/dev/null || true
+      rm -f "${pui}/SophUI" 2>/dev/null || true
+      rm -rf "${pui}/deb/opt" 2>/dev/null || true
+    fi
+  fi
+fi
+
 echo ""
+echo "=========================================================="
 echo "==> 统一构建完成, 产物在 ${REPO_ROOT}/output/"
-echo "==> 汇总: bash docker/verify.sh --image ${IMAGE}"
+echo "==> 构建汇总:"
+PASS_N=0; FAIL_N=0; SKIP_N=0
+STATUS_FILE="${REPO_ROOT}/output/.build-status.txt"
+: > "${STATUS_FILE}"
+for r in "${RESULTS[@]:-}"; do
+  p="${r%%|*}"; st="${r#*|}"
+  printf "    %-24s %s\n" "$p" "$st"
+  printf "%-24s %s\n" "$p" "$st" >> "${STATUS_FILE}"
+  case "$st" in
+    ok) PASS_N=$((PASS_N+1)) ;;
+    skip) SKIP_N=$((SKIP_N+1)) ;;
+    *) FAIL_N=$((FAIL_N+1)) ;;
+  esac
+done
+echo "==> 通过: ${PASS_N}  失败: ${FAIL_N}  跳过: ${SKIP_N}"
+echo "==> 状态文件: ${STATUS_FILE}"
+echo "=========================================================="
+echo "==> 产物清单: bash docker/gen-manifest.sh"
+[[ "${FAIL_N}" = "0" ]] || { echo "==> 存在失败项, 请查看上方 [xxx] 退出码" >&2; exit 1; }
+echo "==> 镜像自检: bash docker/verify.sh --image ${IMAGE}"

@@ -1,10 +1,21 @@
 #!/bin/bash
+# pbmsec 统一构建接口 (M1 规范 v0.1)
+# 用法: bash release.sh [ARCH] [VERSION]
+#   ARCH:    all（默认，deb 为 Architecture: all 双架构合并包）
+#   VERSION: 显式版本号（默认 1.6.4）
+#   env OUTPUT_DIR: 产物目录（默认 <repo>/output/pbmsec/）
+# 依赖: 先构建 psocbak（自动同步 socbak.zip，缺失时用入库旧包）
+set -uo pipefail
 
 BUILD_RET=0
 
 echo "build bmsec ..."
 
-BMSEC_PACKAGE_VERSION="1.6.4"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ARCH="${1:-all}"
+BMSEC_PACKAGE_VERSION="${2:-1.6.4}"
+OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/output/pbmsec}"
 
 export CMD_PANDOC=$(command -v pandoc)
 export CMD_DPKG_DEB=$(command -v dpkg-deb)
@@ -68,5 +79,9 @@ else
 	BUILD_RET=-1
 fi
 cp *.deb output/
+
+# 统一接口：汇聚产物到 OUTPUT_DIR
+mkdir -p "$OUTPUT_DIR"
+cp *.deb "$OUTPUT_DIR/"
 
 exit $BUILD_RET
