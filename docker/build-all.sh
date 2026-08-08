@@ -56,7 +56,7 @@ DEFAULT_ARCH[pdfss_cpp]=host
 DEFAULT_ARCH[pqt_batch_deployment]=amd64
 DEFAULT_ARCH[pqt_memory_edit]=amd64
 DEFAULT_ARCH[pSophUI]=arm64
-DEFAULT_ARCH[pmulti_video_qt]=arm64
+# pmulti_video_qt: 按 MYSWY 决定（2026-08-08）不需要做，从统一构建范围排除
 DEFAULT_ARCH[psoph_phytool]=all
 DEFAULT_ARCH[pspacc_efuse_demo]=amd64
 
@@ -76,7 +76,6 @@ PLATFORMS[pdfss_cpp]="amd64/arm64/armbi/loongarch64/riscv64/sw_64/win-amd64/win-
 PLATFORMS[pqt_batch_deployment]="amd64/arm64"
 PLATFORMS[pqt_memory_edit]="amd64/arm64 + windows"
 PLATFORMS[pSophUI]="arm64(交叉Qt)"
-PLATFORMS[pmulti_video_qt]="arm64(需SDK)"
 PLATFORMS[psoph_phytool]="通用脚本"
 PLATFORMS[pspacc_efuse_demo]="amd64/arm64"
 
