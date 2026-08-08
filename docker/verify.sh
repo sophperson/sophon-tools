@@ -99,6 +99,8 @@ CHECK  "7z"                     "7z | head -1"
 CHECK  "zip"                    "zip -v | head -1"
 CHECK  "upx"                    "upx --version | head -1"
 CHECK  "patchelf"               "patchelf --version"
+CHECK  "pandoc"                 "pandoc --version | head -1"
+CHECK  "sudo"                   "sudo --version | head -1"
 CHECK  "qemu-aarch64-static"    "qemu-aarch64-static --version | head -1"
 CHECK  "qemu-loongarch64"       "qemu-loongarch64 --version | head -1"
 

@@ -71,7 +71,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libssl-dev libtool autoconf automake \
         file binutils upx-ucl \
         qemu-user qemu-user-static binfmt-support \
-        libfuse2 ssh strace \
+        libfuse2 ssh strace pandoc sudo \
     && rm -rf /var/lib/apt/lists/*
 
 # ---- Go(来自 Stage1, 已校验) ----

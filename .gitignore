@@ -75,3 +75,6 @@ source/psophliteos/build/sophliteos/DEBIAN/control
 docs/superpowers/
 **/docs/superpowers/
 .superpowers/
+
+# pnpm 缓存
+.pnpm-store/
