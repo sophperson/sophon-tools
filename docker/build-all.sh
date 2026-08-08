@@ -181,6 +181,34 @@ else
   done
 fi
 
+# ---- 构建后清理：pSophUI 的 qmake 会在源码树内重生成 Makefile 并留下编译产物 ----
+# Makefile 是 qmake 生成物（仓库内为旧版 /env/qt_fl2000 路径），构建时被重写。
+# 为避免每次全量 release 弄脏工作区，构建后恢复仓库内 Makefile 并移除编译产物。
+# 产物由容器内 root 创建，清理时优先 sudo（与根 release.sh 旧版一致），无 sudo 则尽力而为。
+if [[ -z "${ONLY_PROJECT}" || "${ONLY_PROJECT}" = "pSophUI" ]]; then
+  pui="${REPO_ROOT}/source/pSophUI/SophUI"
+  if [[ -d "${pui}" ]]; then
+    git -C "${REPO_ROOT}" checkout -- "source/pSophUI/SophUI/Makefile" 2>/dev/null || true
+    if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+      sudo rm -rf "${pui}"/.qmake.stash \
+                  "${pui}"/Makefile.Debug \
+                  "${pui}"/Makefile.Release \
+                  "${pui}"/release \
+                  "${pui}"/ui_mainwindow.h 2>/dev/null || true
+      sudo rm -f "${pui}/SophUI" 2>/dev/null || true
+      sudo rm -rf "${pui}/deb/opt" 2>/dev/null || true
+    else
+      rm -rf "${pui}"/.qmake.stash \
+             "${pui}"/Makefile.Debug \
+             "${pui}"/Makefile.Release \
+             "${pui}"/release \
+             "${pui}"/ui_mainwindow.h 2>/dev/null || true
+      rm -f "${pui}/SophUI" 2>/dev/null || true
+      rm -rf "${pui}/deb/opt" 2>/dev/null || true
+    fi
+  fi
+fi
+
 echo ""
 echo "=========================================================="
 echo "==> 统一构建完成, 产物在 ${REPO_ROOT}/output/"
