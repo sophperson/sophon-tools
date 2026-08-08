@@ -1,11 +1,22 @@
 #!/bin/bash
+# psocbak 统一构建接口 (M1 规范 v0.1)
+# 用法: bash release.sh [ARCH] [VERSION]
+#   ARCH:    arm64（默认，binTools 为 aarch64）；amd64 仅打包脚本
+#   VERSION: 显式版本号（默认从 socbak/socbak.sh 提取 v1.2.1）
+#   env OUTPUT_DIR: 产物目录（默认 <repo>/output/psocbak/）
+set -uo pipefail
 
 BUILD_RET=0
-
 export CMD_7Z=$(command -v 7z)
 export CMD_ZIP=$(command -v zip)
 
-echo "build socbak ..."
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ARCH="${1:-arm64}"
+VERSION="${2:-$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' "$SCRIPT_DIR/socbak/socbak.sh" | head -1)}"
+OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/output/psocbak}"
+
+echo "build socbak (arch=$ARCH version=$VERSION) ..."
 
 rm -rf socbak.zip 2>/dev/null
 rm -rf output 2>/dev/null
@@ -24,5 +35,9 @@ else
 	BUILD_RET=-1
 fi
 cp socbak.zip output/
+
+# 统一接口：汇聚产物到 OUTPUT_DIR
+mkdir -p "$OUTPUT_DIR"
+cp socbak.zip "$OUTPUT_DIR/"
 
 exit $BUILD_RET

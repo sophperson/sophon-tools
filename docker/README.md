@@ -82,15 +82,39 @@ cd /workspace/sophon-tools/source/pbmssm
 bash build/build-deb-bmssm.sh   # 需以非 root 用户运行，或改输出目录为可写路径
 ```
 
-### 单条命令跑某个子项目构建
+## 统一构建入口（M3）：全部 17 子项目一键编译
+
+每个子项目都提供统一接口的 `release.sh`（M1 规范 v0.1）：
 
 ```bash
-docker run --rm \
-  -v "$(pwd)":/workspace/sophon-tools \
-  -w /workspace/sophon-tools \
-  sophon-tools-build:latest \
-  bash -c 'cd source/pbmssm && bash build/build-deb-bmssm.sh'
+bash release.sh [ARCH] [VERSION]
+#   ARCH:    arm64 | amd64 | all（默认按子项目）
+#   VERSION: 显式版本号（缺省用子项目版本来源）
+#   env OUTPUT_DIR: 覆盖产物目录（默认 <repo>/output/<子项目>/）
 ```
+
+`docker/build-all.sh` 在镜像内依次驱动全部子项目的 `release.sh`，产物汇聚到仓库根 `output/<子项目>/`：
+
+```bash
+# 构建全部 17 子项目（默认平台）
+bash docker/build-all.sh
+
+# 只构建指定子项目 / 架构
+bash docker/build-all.sh --project pbmssm
+bash docker/build-all.sh --arch arm64
+
+# 查看构建清单（子项目 + 平台 + 使用镜像）
+bash docker/build-all.sh --list
+```
+
+### 各子项目使用的镜像
+
+| 子项目 | 镜像 | 说明 |
+|--------|------|------|
+| 大部分（pbmssm/psophliteos/pdfss_cpp/pbm_set_ip/pbmsec 等） | `sophon-tools-build` | 统一镜像 |
+| pqt_batch_deployment / pqt_memory_edit | `sophon-tools-build-pqt` | linux AppImage 需 glibc≤2.31，宿主执行 release.sh（内部调 docker/pqt/build-pqt.sh） |
+| pSophUI | `cross_build_sophon_u20:v1` | aarch64 Qt 5.12.8 交叉工具链（13.24 同款） |
+| pmulti_video_qt | `sophon-tools-build` | ⚠️ 需设备侧 libsophon/sophon-mw SDK，缺失时如实报障碍（退出码 3） |
 
 ## 镜像自检
 
@@ -137,11 +161,14 @@ bash docker/examples/cross-test/run.sh --image sophon-tools-build:latest
 ## 已知边界
 
 1. **pqt 系列 AppImage** 用专用镜像 `sophon-tools-build-pqt`（ubuntu:20.04，glibc 2.31）构建，产物兼容 glibc ≥ 2.27 的系统。
-2. **pSophUI / pmulti_video_qt** 需要交叉 Qt / libsophon SDK，本镜像不含（M3 处理）。
-3. **pdfss_cpp libs 编译**（libssh2/mbedtls/zlib 静态）耗时较长，建议镜像内预编一次（build_libs.sh）。
-4. **dfss 私有工具链**默认不内置；需要时按上文方式导出。
-5. 容器内构建涉及 `sudo` 的脚本（根 `release.sh`）需以 root 运行（镜像默认 root）或调整输出目录权限。
-6. **pqt windows 端**依赖 Qt 5.15 mingw 静态库（`build-qt-mingw.sh` 交叉编译，1-2 小时），
+2. **pSophUI** 已接入：用 `cross_build_sophon_u20:v1`（aarch64 Qt 5.12.8 + Linaro GCC 6.3）交叉编译，
+   产出 `sophgo-hdmi_<ver>_arm64.deb` + `SophUI_arm64`（尾部 upx 缺失仅告警，不影响产物）。
+3. **pmulti_video_qt** 仍为边界：依赖设备侧 libsophon/sophon-mw SDK，统一镜像未预装，
+   `release.sh` 检测到缺失如实返回退出码 3；待镜像预装 SDK 后可接入。
+4. **pdfss_cpp libs 编译**（libssh2/mbedtls/zlib 静态）耗时较长，建议镜像内预编一次（build_libs.sh）。
+5. **dfss 私有工具链**默认不内置；需要时按上文方式导出。
+6. 容器内构建涉及 `sudo` 的脚本（根 `release.sh`）需以 root 运行（镜像默认 root）或调整输出目录权限。
+7. **pqt windows 端**依赖 Qt 5.15 mingw 静态库（`build-qt-mingw.sh` 交叉编译，1-2 小时），
    仓库 `libs/win_amd64` 只含 libssh2/openssl，不含 Qt。
 
 ## 目录结构
