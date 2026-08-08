@@ -33,6 +33,38 @@
 
 ## 编译方式
 
+### 一键全量多平台 release（推荐）
+
+本仓库已接入统一构建工程（M1~M4）：16 个子项目全部提供统一接口 `release.sh`，由
+Docker 统一镜像 `sophon-tools-build` 在容器内完成全部多平台编译。**一条命令全量出包**：
+
+```bash
+# 前置：统一构建镜像（首次）
+bash docker/build.sh --with-dfss-toolchains   # 完整镜像（含 dfss 私有 sw_64/loongarch64 工具链）
+
+# 一键全量 release（所有子项目多平台，Docker 内编译）
+bash release.sh
+
+# 常用变体
+bash release.sh --project pbmssm            # 单项目快速构建
+bash release.sh --version 2.1.0             # 全量 + 统一版本号
+bash release.sh --project pqt_memory_edit   # 宿主执行（pqt 系列需 docker-in-docker）
+```
+
+构建结束后：
+
+- 全部产物汇聚到 `output/<子项目>/`（保持既有 output 约定）
+- `output/MANIFEST.txt`：完整产物清单（子项目 / 文件名 / 架构 / 版本 / md5）
+- `output/git_hash.txt`：构建时仓库 HEAD
+- `output/.build-status.txt`：各子项目 PASS/FAIL/SKIP 状态
+
+**失败隔离**：单个子项目失败不阻塞整体，其余照常出包；构建结束列出失败项，
+`release.sh` 存在失败时以非零退出码结束（失败项见 `.build-status.txt` 与终端汇总）。
+
+详细文档见 [`docker/README.md`](./docker/README.md)。
+
+### 传统方式（单子项目）
+
 1. 支持一键编译的子项目在本目录下执行 `release.sh` 后会将成果输出到 `output` 目录
 2. 不支持一键编译的子项目请参考源码目录中的 `readme.md` 自行准备环境编译
 
@@ -42,3 +74,4 @@
 * 7z/zip
 * dpkg-deb
 * pandoc
+* docker（统一构建镜像 `sophon-tools-build:m2`）
