@@ -45,3 +45,6 @@ source/deb/opt/sophon/*
 !*.so
 !*.a
 memory_edit*.tar.xz
+
+# docker 交叉编译产物
+build-win/

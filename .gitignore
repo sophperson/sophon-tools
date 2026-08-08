@@ -16,6 +16,8 @@ output/*
 *.tar
 *.tar.gz
 *.AppImage
+# dfss 私有工具链归档（从 13.24 容器导出，体积大，不入库）
+docker/toolchains/
 
 
 # Model file
@@ -73,3 +75,6 @@ source/psophliteos/build/sophliteos/DEBIAN/control
 docs/superpowers/
 **/docs/superpowers/
 .superpowers/
+
+# pnpm 缓存
+.pnpm-store/
