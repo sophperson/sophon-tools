@@ -11,23 +11,24 @@
 ## 一条命令构建镜像
 
 ```bash
-# 基础镜像（不含 dfss 私有工具链 sw_64/loongarch64 与 Qt mingw 静态库）
+# 基础镜像（不含 dfss 私有工具链 sw_64/loongarch64、Qt mingw 静态库、pSophUI 交叉工具链）
 bash docker/build.sh
 
-# 完整镜像（内置 dfss 私有工具链 + Qt mingw 静态库）
-bash docker/build.sh --with-dfss-toolchains --with-qt-mingw
+# 完整镜像（内置 dfss 私有工具链 + Qt mingw 静态库 + pSophUI 交叉工具链）
+bash docker/build.sh --with-dfss-toolchains --with-qt-mingw --with-sophui-toolchain
 
-# 只内置 dfss / 只内置 Qt mingw / 指定标签 / 禁用缓存
+# 只内置 dfss / 只内置 Qt mingw / 只内置 pSophUI / 指定标签 / 禁用缓存
 bash docker/build.sh --with-dfss-toolchains
 bash docker/build.sh --with-qt-mingw
+bash docker/build.sh --with-sophui-toolchain
 bash docker/build.sh --tag v1.0 --no-cache
 ```
 
 构建依赖：
 - docker（≥20.10，BuildKit 默认开启），网络可访问 go.dev / nodejs.org / musl.cc
-- `cross_build_sophon_u20:v1` 镜像（13.24 服务器有），Dockerfile 多阶段从它 COPY
-  pSophUI 交叉工具链（`/env/qt_5.12.8_nosysroot` + `/env/gcc-linaro-6.3.1-2017.05-x86_64_aarch64-linux-gnu`）
-- dfss 私有工具链 / Qt mingw 静态库：见下文
+- pSophUI / dfss 私有工具链：以 `toolchains/` 归档内置（`--with-sophui-toolchain` / `--with-dfss-toolchains`），
+  不再依赖 `cross_build_sophon_u20:v1` 独立镜像（导出归档见下文）
+- Qt mingw 静态库：见下文
 
 ### 版本锁定（可复现）
 
@@ -46,7 +47,7 @@ ubuntu:20.04 的 glibc 是 2.31（22.04 是 2.35）。M5 决定以 20.04 为唯�
 |------|-----------|---------------------|
 | pqt AppImage（glibc≤2.31） | `sophon-tools-build-pqt`（20.04） | 基座即 20.04，Qt5 + libgl1-mesa-dev + fuse + patchelf 内置 |
 | pqt windows exe（Qt mingw 静态库） | `sophon-tools-build:m2` + 宿主 `/opt/qt-mingw` | `--with-qt-mingw` 内置 `/opt/qt-mingw` |
-| pSophUI（aarch64 Qt 5.12.8 交叉） | `cross_build_sophon_u20:v1`（20.04） | 多阶段 COPY `/env/qt_5.12.8_nosysroot` + `/env/gcc-linaro-...` |
+| pSophUI（aarch64 Qt 5.12.8 交叉） | `cross_build_sophon_u20:v1`（20.04） | `--with-sophui-toolchain` 内置 `/env/qt_5.12.8_nosysroot` + `/env/gcc-linaro-...` |
 | dfss sw_64 / loongarch64 | `sophon-tools-build:m2` 内置 | `--with-dfss-toolchains` 内置（不变） |
 | 其余 13 子项目 | `sophon-tools-build:m2` | 直接满足 |
 
@@ -117,8 +118,25 @@ bash docker/build.sh --with-qt-mingw
 
 ## pSophUI 交叉工具链（aarch64 Qt 5.12.8 + Linaro GCC 6.3）
 
-与 13.24 `cross_build_sophon_u20:v1` 完全一致，Dockerfile 多阶段直接 COPY（不额外导出）。
-qmake / mkspecs / Linaro gcc 硬编码 `/env` 绝对路径，COPY 后保持原始路径，绝对引用全部有效。
+与 13.24 `cross_build_sophon_u20:v1` 完全一致，**默认不内置**（约 1GB，私有源）。两种获取方式：
+
+### 方式 1：从 13.24 服务器镜像导出（推荐）
+
+在 13.24 服务器上执行：
+
+```bash
+bash docker/scripts/export-sophui-toolchains.sh
+# 产物: docker/toolchains/sophui-cross-toolchains.tar.zst (约 253MB)
+```
+
+然后构建：
+
+```bash
+bash docker/build.sh --with-sophui-toolchain
+```
+
+归档内置后，构建期不再依赖 `cross_build_sophon_u20:v1` 独立镜像（与 M2 处理 dfss 工具链的方式一致）。
+qmake / mkspecs / Linaro gcc 硬编码 `/env` 绝对路径，解压到 `/env` 原始路径，绝对引用全部有效。
 
 ## 挂载源码跑构建
 
@@ -245,7 +263,8 @@ bash docker/examples/cross-test/run.sh --image sophon-tools-build:unified
 1. **pqt 系列 AppImage** 在统一镜像（20.04，glibc 2.31）内构建，产物兼容 glibc ≥ 2.27 的系统。
 2. **pqt 系列 windows exe** 依赖 Qt 5.15 mingw 静态库（`build-qt-mingw.sh` 交叉编译，20-40 分钟）；
    `--with-qt-mingw` 后内置 `/opt/qt-mingw`，全部在统一镜像内完成，无需宿主 `/opt/qt-mingw`。
-3. **pSophUI** 在统一镜像内交叉编译（aarch64 Qt 5.12.8 + Linaro GCC 6.3，来自 cross_build_sophon_u20:v1），
+3. **pSophUI** 在统一镜像内交叉编译（aarch64 Qt 5.12.8 + Linaro GCC 6.3，`--with-sophui-toolchain` 内置，
+   `sophui-cross-toolchains.tar.zst` 归档导出自 cross_build_sophon_u20:v1），
    产出 `sophgo-hdmi_<ver>_arm64.deb` + `SophUI_arm64`（尾部 upx 缺失仅告警，不影响产物）。
 4. **pmulti_video_qt** 已按 MYSWY 决定从统一构建范围排除（不需要做），不再参与构建。
 5. **dfss 私有工具链**默认不内置；需要时按上文方式导出（`--with-dfss-toolchains`）。
@@ -257,7 +276,7 @@ bash docker/examples/cross-test/run.sh --image sophon-tools-build:unified
 
 ```
 docker/
-├── Dockerfile                # 多阶段构建（Stage1 下载校验 → Stage2 运行镜像 → Stage3 pSophUI 工具链）
+├── Dockerfile                # 多阶段构建（Stage1 下载校验 → Stage2 运行镜像；工具链归档内置）
 ├── versions.env              # 唯一版本源（版本 + 校验和）
 ├── build.sh                  # 一条命令构建镜像
 ├── build-all.sh              # 统一构建入口（M3/M4/M5，驱动全部子项目 release.sh）
@@ -265,12 +284,13 @@ docker/
 ├── verify.sh                 # 镜像自检（对照 M1 清单 + pqt/pSophUI 工具链）
 ├── README.md                 # 本文件
 ├── scripts/
-│   └── export-dfss-toolchains.sh  # 从 13.24 容器导出 sw_64/loongarch64 工具链
+│   ├── export-dfss-toolchains.sh     # 从 13.24 容器导出 sw_64/loongarch64 工具链
+│   └── export-sophui-toolchains.sh   # 从 13.24 镜像导出 pSophUI 交叉工具链
 ├── pqt/
 │   ├── Dockerfile            # [废弃] pqt 专用镜像（M5 已并入统一镜像，保留兼容）
 │   ├── build-pqt.sh          # pqt linux/windows 一键编译（支持 inplace 模式）
 │   └── build-qt-mingw.sh     # Qt 5.15.2 mingw 静态库交叉编译
 ├── examples/
 │   └── cross-test/           # 交叉编译示例（C/Rust/Windows）
-└── toolchains/               # 导出的私有工具链归档（构建时由 --with-dfss-toolchains / --with-qt-mingw 使用）
+└── toolchains/               # 导出的私有工具链归档（构建时由 --with-dfss-toolchains / --with-qt-mingw / --with-sophui-toolchain 使用）
 ```

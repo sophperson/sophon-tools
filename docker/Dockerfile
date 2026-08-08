@@ -8,17 +8,20 @@
 #        - 旧 sophon-tools-build:m2      (ubuntu:22.04 主镜像)  -> 本镜像
 #        - 旧 sophon-tools-build-pqt     (ubuntu:20.04 pqt 专用) -> 本镜像(合并 pqt 依赖)
 #        - 旧 cross_build_sophon_u20:v1  (ubuntu:20.04 pSophUI)  -> 本镜像(并入 aarch64 Qt)
-#   * 多阶段构建: Stage1 下载并校验国外大体积工具链(Go/Node); Stage2 汇入运行镜像;
-#     Stage3 从 cross_build_sophon_u20:v1 汇入 pSophUI 交叉工具链。
+#   * 多阶段构建: Stage1 下载并校验国外大体积工具链(Go/Node); Stage2 汇入运行镜像。
+#     pSophUI 交叉工具链(Stage3 独立镜像 cross_build_sophon_u20:v1)已并入本镜像,
+#     通过 toolchains/sophui-cross-toolchains.tar.zst 归档内置, 不再依赖独立镜像。
 #   * 版本唯一来源 docker/versions.env(由 docker/build.sh 注入 ARG), 全部版本锁定。
 #   * 交叉工具链: apt 精确版本(glibc) + musl.cc(静态) + dfss 私有工具链(sw_64/loongarch64)。
 #   * dfss 私有工具链默认不内置(私有源, 体积大); 通过 --with-dfss-toolchains 或构建上下文
 #     toolchains/ 目录内置。
 #   * Qt mingw 静态库(pqt windows exe 依赖)默认不内置; 通过 --with-qt-mingw 或构建上下文
 #     toolchains/qt-mingw/ 目录内置。
+#   * pSophUI 交叉工具链(aarch64 Qt 5.12.8 + Linaro GCC 6.3)默认不内置(约 1GB, 私有源);
+#     通过 --with-sophui-toolchain 或构建上下文 toolchains/sophui-cross-toolchains.tar.zst 内置。
 #
 # 构建(一条命令):  bash docker/build.sh
-# 构建(含私有工具链): bash docker/build.sh --with-dfss-toolchains --with-qt-mingw
+# 构建(含私有工具链): bash docker/build.sh --with-dfss-toolchains --with-qt-mingw --with-sophui-toolchain
 # =============================================================================
 
 # ---- ARG 集合(由 build.sh 从 versions.env 注入) ----
@@ -29,6 +32,7 @@ ARG NODE_TARBALL_URL NODE_TARBALL_SHA256
 ARG PNPM_VERSION YARN_VERSION
 ARG WITH_DFSS=0
 ARG WITH_QT_MINGW=0
+ARG WITH_SOPHUI=0
 
 # ---- Stage 1: 下载 + 校验(仅构建期需要, 不进入最终镜像) ----
 FROM ${UBUNTU_BASE_DIGEST} AS downloader
@@ -51,14 +55,9 @@ RUN curl -fsSL "${NODE_TARBALL_URL}" -o node.tar.xz \
     && mkdir -p /opt/nodejs && tar -C /opt/nodejs --strip-components=1 -xJf node.tar.xz \
     && /opt/nodejs/bin/node --version
 
-# ---- Stage 3: pSophUI 交叉工具链来源(13.24 cross_build_sophon_u20:v1 同款) ----
-# 多阶段直接复用 13.24 现成镜像; qmake/mkspecs/Linaro gcc 硬编码 /env 绝对路径,
-# 故 COPY 到容器内原始路径, 保证绝对引用全部有效。
-FROM cross_build_sophon_u20:v1 AS sophui
-
 # ---- Stage 2: 最终运行镜像 ----
 FROM ${UBUNTU_BASE_DIGEST}
-ARG GO_VERSION RUST_VERSION PNPM_VERSION YARN_VERSION WITH_DFSS WITH_QT_MINGW
+ARG GO_VERSION RUST_VERSION PNPM_VERSION YARN_VERSION WITH_DFSS WITH_QT_MINGW WITH_SOPHUI
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -125,13 +124,22 @@ RUN mkdir -p /opt/musl \
     && tar -C /opt/musl -xzf /tmp/musl-x86_64.tgz && rm /tmp/musl-x86_64.tgz \
     && aarch64-linux-musl-gcc --version | head -1 && x86_64-linux-musl-gcc --version | head -1
 
-# ---- pSophUI 交叉工具链(aarch64 Qt 5.12.8 + Linaro GCC 6.3, 来自 Stage3) ----
+# ---- pSophUI 交叉工具链(aarch64 Qt 5.12.8 + Linaro GCC 6.3) ----
 # 与 13.24 cross_build_sophon_u20:v1 完全一致, 保持 /env 原始路径。
+# 来源: toolchains/sophui-cross-toolchains.tar.zst(由 export-sophui-toolchains.sh 从
+#       13.24 cross_build_sophon_u20:v1 导出), 解压到 /env 原始路径, 保证 qmake/mkspecs/
+#       Linaro gcc 硬编码的绝对引用全部有效。
 # 注意: 不把 /env/qt_5.12.8_nosysroot/bin 加入全局 PATH——其含通用名 qmake/moc,
 #       会遮蔽宿主机 Qt5 qmake, 破坏 pqt 系列(linuxdeployqt)构建。
 #       pSophUI 的 release.sh 内部自行 export 自己的 qmake/gcc 到 PATH(见 source/pSophUI/release.sh)。
-COPY --from=sophui /env/qt_5.12.8_nosysroot /env/qt_5.12.8_nosysroot
-COPY --from=sophui /env/gcc-linaro-6.3.1-2017.05-x86_64_aarch64-linux-gnu /env/gcc-linaro-6.3.1-2017.05-x86_64_aarch64-linux-gnu
+# 默认不内置(约 1GB, 私有源); 加 --with-sophui-toolchain 或构建上下文放归档自动内置。
+ARG WITH_SOPHUI=0
+COPY toolchains/ /tmp/toolchains/
+RUN if [ "${WITH_SOPHUI}" = "1" ] && [ -f /tmp/toolchains/sophui-cross-toolchains.tar.zst ]; then \
+        mkdir -p /env \
+        && tar -C /env -I zstd -xf /tmp/toolchains/sophui-cross-toolchains.tar.zst \
+        && rm -f /tmp/toolchains/sophui-cross-toolchains.tar.zst; \
+    fi
 
 # ---- Qt mingw 静态库(pqt windows exe 依赖) ----
 # 构建上下文需含 qt-mingw.tar.zst 或 toolchains/qt-mingw/ 目录(由 build-qt-mingw.sh 在 20.04
