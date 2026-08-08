@@ -102,6 +102,30 @@ bash docker/verify.sh
 bash docker/verify.sh --cross
 ```
 
+## pqt 系列（Qt GUI 工具）专用构建
+
+`docker/pqt/` 提供 pqt 系列（`pqt_memory_edit` 图形化内存修改工具、`pqt_batch_deployment` 批量部署工具）的专用构建。
+
+> **为什么独立镜像**：pqt 打 AppImage 依赖 linuxdeployqt，它强制宿主 glibc ≤ 2.31
+> （保证产物在旧发行版可运行）。sophon-tools-build 基于 22.04（glibc 2.35）不满足，
+> 故 pqt 专用镜像基于 ubuntu:20.04（glibc 2.31）。
+
+```bash
+# linux AppImage 一键编译（自动生成 memory_edit.tar.xz 前置依赖）
+bash docker/pqt/build-pqt.sh --project pqt_memory_edit --linux
+bash docker/pqt/build-pqt.sh --project pqt_batch_deployment --linux
+
+# windows exe（需先交叉编译 Qt mingw 静态库，一次约 1-2 小时）
+bash docker/pqt/build-qt-mingw.sh          # 交叉编译 Qt 5.15.2 mingw 静态
+bash docker/pqt/build-pqt.sh --project pqt_memory_edit --windows
+
+# 两端一起
+bash docker/pqt/build-pqt.sh --project pqt_memory_edit --all
+```
+
+已实测：`qt_mem_edit_V2.12.1-x86_64.AppImage`（25.9MB）在 ubuntu:20.04 镜像内一键产出，
+AppImage 可正常解包运行。
+
 ## 交叉编译示例
 
 `docker/examples/cross-test/` 提供 C / Rust / Windows 的交叉编译最小示例：
@@ -112,11 +136,13 @@ bash docker/examples/cross-test/run.sh --image sophon-tools-build:latest
 
 ## 已知边界
 
-1. **pqt 系列 AppImage** 原基于 18.04（glibc 2.27），本镜像 22.04（glibc 2.35）产物需在目标设备实测。
+1. **pqt 系列 AppImage** 用专用镜像 `sophon-tools-build-pqt`（ubuntu:20.04，glibc 2.31）构建，产物兼容 glibc ≥ 2.27 的系统。
 2. **pSophUI / pmulti_video_qt** 需要交叉 Qt / libsophon SDK，本镜像不含（M3 处理）。
 3. **pdfss_cpp libs 编译**（libssh2/mbedtls/zlib 静态）耗时较长，建议镜像内预编一次（build_libs.sh）。
 4. **dfss 私有工具链**默认不内置；需要时按上文方式导出。
 5. 容器内构建涉及 `sudo` 的脚本（根 `release.sh`）需以 root 运行（镜像默认 root）或调整输出目录权限。
+6. **pqt windows 端**依赖 Qt 5.15 mingw 静态库（`build-qt-mingw.sh` 交叉编译，1-2 小时），
+   仓库 `libs/win_amd64` 只含 libssh2/openssl，不含 Qt。
 
 ## 目录结构
 
@@ -129,6 +155,10 @@ docker/
 ├── README.md                 # 本文件
 ├── scripts/
 │   └── export-dfss-toolchains.sh  # 从 13.24 容器导出 sw_64/loongarch64 工具链
+├── pqt/
+│   ├── Dockerfile            # pqt 专用镜像（ubuntu:20.04，glibc 2.31）
+│   ├── build-pqt.sh          # pqt linux/windows 一键编译
+│   └── build-qt-mingw.sh     # Qt 5.15.2 mingw 静态库交叉编译
 ├── examples/
 │   └── cross-test/           # 交叉编译示例（C/Rust/Windows）
 └── toolchains/               # 导出的私有工具链归档（构建时由 --with-dfss-toolchains 使用）

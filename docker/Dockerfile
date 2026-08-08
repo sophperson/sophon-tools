@@ -61,7 +61,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
         gcc-arm-linux-gnueabi g++-arm-linux-gnueabi \
         gcc-riscv64-linux-gnu g++-riscv64-linux-gnu \
-        gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 \
+        gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 gcc-mingw-w64-i686 g++-mingw-w64-i686 \
         dpkg dpkg-dev fakeroot \
         qtbase5-dev qttools5-dev-tools \
         ca-certificates curl wget git \
