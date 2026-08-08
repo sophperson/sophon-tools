@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sophon-tools-build 统一构建全部 17 子项目（镜像内一键编译）
+# sophon-tools-build 统一构建全部子项目（镜像内一键编译）
 #
 # 目标: 在 sophon-tools-build 镜像内预装工具链, 对全部子项目执行所有平台的编译。
 # 本脚本是统一入口, 按 M1 规范驱动每个子项目的 release.sh（统一接口）。
@@ -10,14 +10,18 @@
 #     VERSION: 显式版本号（缺省用子项目版本来源）
 #     env OUTPUT_DIR: 覆盖产物目录（默认 <repo>/output/<子项目>/）
 #
+# 范围: 16 个子项目（pmulti_video_qt 已按 MYSWY 决定排除）
+#
 # 用法:
-#   bash docker/build-all.sh                    # 构建全部 17 子项目(默认平台)
+#   bash docker/build-all.sh                    # 构建全部子项目(默认平台)
 #   bash docker/build-all.sh --project pbmssm   # 只构建指定子项目
 #   bash docker/build-all.sh --arch arm64       # 只构建指定架构
 #   bash docker/build-all.sh --image sophon-tools-build:m2
+#   bash docker/build-all.sh --version 2.1.0    # 统一显式版本号（透传给所有 release.sh）
 #   bash docker/build-all.sh --list             # 列出子项目与平台
 #
 # 产物: 全部汇聚到仓库根 output/<子项目>/ (与根 release.sh 一致)
+# 失败隔离: 单子项目失败不影响其他项目，结束后汇总 PASS/FAIL，非零退出码。
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -27,14 +31,16 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 IMAGE="${IMAGE:-sophon-tools-build:m2}"
 ONLY_PROJECT=""
 ONLY_ARCH=""
+BUILD_VERSION=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --project) ONLY_PROJECT="$2"; shift 2; continue ;;
     --arch) ONLY_ARCH="$2"; shift 2; continue ;;
     --image) IMAGE="$2"; shift 2; continue ;;
+    --version) BUILD_VERSION="$2"; shift 2; continue ;;
     --list) LIST_ONLY=1 ;;
-    -h|--help) grep -E '^#' "$0" | sed 's/^# \{0,1\}//' | head -30; exit 0 ;;
+    -h|--help) grep -E '^#' "$0" | sed 's/^# \{0,1\}//' | head -40; exit 0 ;;
     *) echo "未知参数: $1" >&2; exit 1 ;;
   esac
   shift
@@ -103,7 +109,7 @@ EXTRA_ENV[pdfss_cpp]="export PATH=/env/loongson-gnu-toolchain-8.3-x86_64-loongar
 EXTRA_ENV[pSophUI]="export PATH=/env/qt_5.12.8_nosysroot/bin:/env/gcc-linaro-6.3.1-2017.05-x86_64_aarch64-linux-gnu/bin:\$PATH; export QMAKESPEC=/env/qt_5.12.8_nosysroot/mkspecs/linux-aarch64-gnu-g++"
 
 if [[ "${LIST_ONLY:-0}" = "1" ]]; then
-  echo "=== sophon-tools 17 子项目构建清单 ==="
+  echo "=== sophon-tools 16 子项目构建清单（pmulti_video_qt 已排除） ==="
   for p in $(echo "${!DEFAULT_ARCH[@]}" | tr ' ' '\n' | sort); do
     img="${IMAGE_OVERRIDES[$p]:-$IMAGE}"
     printf "  %-22s 平台: %-40s 镜像: %s\n" "$p" "${PLATFORMS[$p]}" "$img"
@@ -115,6 +121,9 @@ fi
 mkdir -p "${REPO_ROOT}/output"
 echo "==> 统一构建, 输出: ${REPO_ROOT}/output"
 
+# 各子项目构建结果（失败隔离汇总）: "<项目>|<退出码>"
+RESULTS=()
+
 run_one() {
   local p="$1"
   local arch="${ONLY_ARCH:-${DEFAULT_ARCH[$p]}}"
@@ -122,36 +131,46 @@ run_one() {
   echo ""
   echo "========== [${p}] 平台: ${PLATFORMS[$p]} arch=${arch} 镜像: ${img} =========="
   local src_dir="${REPO_ROOT}/source/${p}"
-  [[ -d "${src_dir}" ]] || { echo "  [SKIP] 目录不存在: ${src_dir}"; return 0; }
+  if [[ ! -d "${src_dir}" ]]; then
+    echo "  [SKIP] 目录不存在: ${src_dir}"
+    RESULTS+=("${p}|skip")
+    return 0
+  fi
 
+  local rc=0
   # pqt 系列在宿主直接执行 release.sh（内部需要 docker 起专用容器）
   if [[ "${HOST_RUN[$p]:-0}" = "1" ]]; then
     (
       cd "${src_dir}"
-      echo "  >> (宿主) bash release.sh ${arch}"
-      OUTPUT_DIR="${REPO_ROOT}/output/${p}" bash release.sh "${arch}" 2>&1 | tail -20
+      echo "  >> (宿主) bash release.sh ${arch} ${BUILD_VERSION}"
+      OUTPUT_DIR="${REPO_ROOT}/output/${p}" bash release.sh "${arch}" ${BUILD_VERSION} 2>&1 | tail -20
     ) | sed 's/^/    /'
-    local rc=${PIPESTATUS[0]}
+    rc=${PIPESTATUS[0]}
     echo "  [${p}] 退出码: ${rc}"
-    return 0
+  else
+    local extra_env="${EXTRA_ENV[$p]:-}"
+    docker run --rm --privileged \
+      -v /dev:/dev \
+      -v "${REPO_ROOT}":/workspace/sophon-tools \
+      -w "/workspace/sophon-tools/source/${p}" \
+      -e OUTPUT_DIR="/workspace/sophon-tools/output/${p}" \
+      "${img}" bash -c "
+        set -euo pipefail
+        git config --global --add safe.directory '*' 2>/dev/null || true
+        git config --global --add safe.directory /workspace/sophon-tools 2>/dev/null || true
+        ${extra_env}
+        echo '  >> bash release.sh ${arch} ${BUILD_VERSION}'
+        bash release.sh ${arch} ${BUILD_VERSION} 2>&1 | tail -20
+      " 2>&1 | sed 's/^/    /'
+    rc=${PIPESTATUS[0]}
+    echo "  [${p}] 退出码: ${rc}"
   fi
 
-  local extra_env="${EXTRA_ENV[$p]:-}"
-  docker run --rm --privileged \
-    -v /dev:/dev \
-    -v "${REPO_ROOT}":/workspace/sophon-tools \
-    -w "/workspace/sophon-tools/source/${p}" \
-    -e OUTPUT_DIR="/workspace/sophon-tools/output/${p}" \
-    "${img}" bash -c "
-      set -e
-      git config --global --add safe.directory '*' 2>/dev/null || true
-      git config --global --add safe.directory /workspace/sophon-tools 2>/dev/null || true
-      ${extra_env}
-      echo '  >> bash release.sh ${arch}'
-      bash release.sh ${arch} 2>&1 | tail -20
-    " 2>&1 | sed 's/^/    /'
-  local rc=${PIPESTATUS[0]}
-  echo "  [${p}] 退出码: ${rc}"
+  if [[ "${rc}" = "0" ]]; then
+    RESULTS+=("${p}|ok")
+  else
+    RESULTS+=("${p}|fail:${rc}")
+  fi
 }
 
 if [[ -n "${ONLY_PROJECT}" ]]; then
@@ -163,5 +182,25 @@ else
 fi
 
 echo ""
+echo "=========================================================="
 echo "==> 统一构建完成, 产物在 ${REPO_ROOT}/output/"
-echo "==> 汇总: bash docker/verify.sh --image ${IMAGE}"
+echo "==> 构建汇总:"
+PASS_N=0; FAIL_N=0; SKIP_N=0
+STATUS_FILE="${REPO_ROOT}/output/.build-status.txt"
+: > "${STATUS_FILE}"
+for r in "${RESULTS[@]:-}"; do
+  p="${r%%|*}"; st="${r#*|}"
+  printf "    %-24s %s\n" "$p" "$st"
+  printf "%-24s %s\n" "$p" "$st" >> "${STATUS_FILE}"
+  case "$st" in
+    ok) PASS_N=$((PASS_N+1)) ;;
+    skip) SKIP_N=$((SKIP_N+1)) ;;
+    *) FAIL_N=$((FAIL_N+1)) ;;
+  esac
+done
+echo "==> 通过: ${PASS_N}  失败: ${FAIL_N}  跳过: ${SKIP_N}"
+echo "==> 状态文件: ${STATUS_FILE}"
+echo "=========================================================="
+echo "==> 产物清单: bash docker/gen-manifest.sh"
+[[ "${FAIL_N}" = "0" ]] || { echo "==> 存在失败项, 请查看上方 [xxx] 退出码" >&2; exit 1; }
+echo "==> 镜像自检: bash docker/verify.sh --image ${IMAGE}"
