@@ -6,7 +6,7 @@
 #   bash docker/examples/cross-test/run.sh [--image <name>]
 set -u
 
-IMAGE="${IMAGE:-sophon-tools-build:latest}"
+IMAGE="${IMAGE:-sophon-tools-build:unified}"
 [[ $# -ge 1 ]] && IMAGE="$1"
 
 echo "== 使用镜像: ${IMAGE}"

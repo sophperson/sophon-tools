@@ -25,7 +25,7 @@ QT_MODULE="qtbase-everywhere-src-${QT_VERSION}"
 QT_URL="https://mirrors.tuna.tsinghua.edu.cn/qt/archive/qt/5.15/${QT_VERSION}/submodules/${QT_MODULE}.tar.xz"
 PREFIX="${PREFIX:-/opt/qt-mingw}"
 JOBS="${JOBS:-$(nproc)}"
-IMAGE="${IMAGE:-sophon-tools-build:m2}"
+IMAGE="${IMAGE:-sophon-tools-build:unified}"
 
 echo "==> 下载 Qt ${QT_VERSION} qtbase 源码..."
 if [[ ! -f "${REPO_ROOT}/docker/toolchains/${QT_MODULE}.tar.xz" ]]; then

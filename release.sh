@@ -1,13 +1,13 @@
 #!/bin/bash
 # =============================================================================
-# sophon-tools 一键全量多平台 release（M4 统一入口）
+# sophon-tools 一键全量多平台 release（M4 统一入口 / M5 单镜像）
 #
 # 用法:
 #   bash release.sh [--project <子项目>] [--version <版本号>] [--no-image-check]
 #
 # 行为:
-#   1. 检查统一构建镜像 sophon-tools-build:m2 是否可用；缺失时提示用
-#      `bash docker/build.sh` 构建（不自动构建，避免长时间阻塞）。
+#   1. 检查统一构建镜像 sophon-tools-build:unified（M5 单镜像, ubuntu:20.04 基座）
+#      是否可用；缺失时提示用 `bash docker/build.sh` 构建（不自动构建，避免长时间阻塞）。
 #   2. 驱动 docker/build-all.sh 对全部子项目做多平台构建（失败隔离：单项目
 #      失败不阻塞整体，结束后列出失败项，非零退出）。
 #   3. 汇聚产物到 output/<子项目>/（保持既有 output 约定），并生成:
@@ -26,7 +26,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 cd "${SCRIPT_DIR}" || exit 1
 
-IMAGE="${IMAGE:-sophon-tools-build:m2}"
+IMAGE="${IMAGE:-sophon-tools-build:unified}"
 ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -43,7 +43,7 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-echo "==> sophon-tools 一键全量 release（M4 统一入口）"
+echo "==> sophon-tools 一键全量 release（M5 单镜像 ${IMAGE}）"
 echo "==> 工作目录: ${SCRIPT_DIR}"
 
 # --- 1. 镜像前置检查 --------------------------------------------------------

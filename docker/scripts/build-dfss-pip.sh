@@ -14,7 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 DOCKER_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-IMAGE="${IMAGE:-sophon-tools-build:m2}"
+IMAGE="${IMAGE:-sophon-tools-build:unified}"
 PDFSS_SRC="${REPO_ROOT}/source/pdfss_cpp"
 SKIP_LIBS=0
 ARCHES=()

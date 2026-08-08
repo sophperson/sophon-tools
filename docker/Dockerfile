@@ -1,16 +1,27 @@
 # syntax=docker/dockerfile:1
 # =============================================================================
-# sophon-tools-build —— sophon-tools 17 子项目统一编译镜像
+# sophon-tools-build —— sophon-tools 16 子项目统一编译镜像（M5 单镜像合并）
 #
 # 设计:
+#   * 基座 ubuntu:20.04（glibc 2.31）: 满足 pqt AppImage 的 linuxdeployqt 硬约束
+#     (glibc<=2.31)，同时作为全部子项目唯一基座，替代 M4 的三镜像方案:
+#        - 旧 sophon-tools-build:m2      (ubuntu:22.04 主镜像)  -> 本镜像
+#        - 旧 sophon-tools-build-pqt     (ubuntu:20.04 pqt 专用) -> 本镜像(合并 pqt 依赖)
+#        - 旧 cross_build_sophon_u20:v1  (ubuntu:20.04 pSophUI)  -> 本镜像(并入 aarch64 Qt)
 #   * 多阶段构建: Stage1 下载并校验国外大体积工具链(Go/Node); Stage2 汇入运行镜像。
+#     pSophUI 交叉工具链(Stage3 独立镜像 cross_build_sophon_u20:v1)已并入本镜像,
+#     通过 toolchains/sophui-cross-toolchains.tar.zst 归档内置, 不再依赖独立镜像。
 #   * 版本唯一来源 docker/versions.env(由 docker/build.sh 注入 ARG), 全部版本锁定。
 #   * 交叉工具链: apt 精确版本(glibc) + musl.cc(静态) + dfss 私有工具链(sw_64/loongarch64)。
 #   * dfss 私有工具链默认不内置(私有源, 体积大); 通过 --with-dfss-toolchains 或构建上下文
 #     toolchains/ 目录内置。
+#   * Qt mingw 静态库(pqt windows exe 依赖)默认不内置; 通过 --with-qt-mingw 或构建上下文
+#     toolchains/qt-mingw/ 目录内置。
+#   * pSophUI 交叉工具链(aarch64 Qt 5.12.8 + Linaro GCC 6.3)默认不内置(约 1GB, 私有源);
+#     通过 --with-sophui-toolchain 或构建上下文 toolchains/sophui-cross-toolchains.tar.zst 内置。
 #
 # 构建(一条命令):  bash docker/build.sh
-# 构建(含私有工具链): bash docker/build.sh --with-dfss-toolchains
+# 构建(含私有工具链): bash docker/build.sh --with-dfss-toolchains --with-qt-mingw --with-sophui-toolchain
 # =============================================================================
 
 # ---- ARG 集合(由 build.sh 从 versions.env 注入) ----
@@ -20,6 +31,8 @@ ARG RUST_VERSION
 ARG NODE_TARBALL_URL NODE_TARBALL_SHA256
 ARG PNPM_VERSION YARN_VERSION
 ARG WITH_DFSS=0
+ARG WITH_QT_MINGW=0
+ARG WITH_SOPHUI=0
 
 # ---- Stage 1: 下载 + 校验(仅构建期需要, 不进入最终镜像) ----
 FROM ${UBUNTU_BASE_DIGEST} AS downloader
@@ -44,7 +57,7 @@ RUN curl -fsSL "${NODE_TARBALL_URL}" -o node.tar.xz \
 
 # ---- Stage 2: 最终运行镜像 ----
 FROM ${UBUNTU_BASE_DIGEST}
-ARG GO_VERSION RUST_VERSION PNPM_VERSION YARN_VERSION WITH_DFSS
+ARG GO_VERSION RUST_VERSION PNPM_VERSION YARN_VERSION WITH_DFSS WITH_QT_MINGW WITH_SOPHUI
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -53,9 +66,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 SHELL ["/bin/bash", "-c"]
 
-# ---- 系统依赖 + apt 交叉工具链(精确版本, 由 ubuntu:22.04 仓库固定) ----
+# ---- 系统依赖 + apt 交叉工具链(精确版本, 由 ubuntu:20.04 仓库固定) ----
 # pdfss_cpp 8 架构: aarch64/armel/riscv64 + mingw-w64(windows amd64/i686)
 # Rust/Go 静态: musl 工具链在 PATH(由 pbmssm 的 fetch-musl-toolchain.sh 识别复用)
+# pqt 系列: qtbase5-dev(Qt 5.12.8, 20.04 仓库) + libgl1-mesa-dev + fuse + patchelf(AppImage)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential gcc g++ make cmake pkg-config \
         gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
@@ -64,6 +78,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 gcc-mingw-w64-i686 g++-mingw-w64-i686 \
         dpkg dpkg-dev fakeroot \
         qtbase5-dev qttools5-dev-tools \
+        libgl1-mesa-dev libglib2.0-0 \
         ca-certificates curl wget git \
         zip unzip p7zip-full patchelf \
         python3 python3-pip python3-dev \
@@ -71,7 +86,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libssl-dev libtool autoconf automake \
         file binutils upx-ucl \
         qemu-user qemu-user-static binfmt-support \
-        libfuse2 ssh strace pandoc sudo \
+        libfuse2 fuse ssh strace pandoc sudo \
     && rm -rf /var/lib/apt/lists/*
 
 # ---- Go(来自 Stage1, 已校验) ----
@@ -109,14 +124,50 @@ RUN mkdir -p /opt/musl \
     && tar -C /opt/musl -xzf /tmp/musl-x86_64.tgz && rm /tmp/musl-x86_64.tgz \
     && aarch64-linux-musl-gcc --version | head -1 && x86_64-linux-musl-gcc --version | head -1
 
-# ---- dfss 私有工具链(sw_64 / loongarch64)----
+# ---- pSophUI 交叉工具链(aarch64 Qt 5.12.8 + Linaro GCC 6.3) ----
+# 与 13.24 cross_build_sophon_u20:v1 完全一致, 保持 /env 原始路径。
+# 来源: toolchains/sophui-cross-toolchains.tar.zst(由 export-sophui-toolchains.sh 从
+#       13.24 cross_build_sophon_u20:v1 导出), 解压到 /env 原始路径, 保证 qmake/mkspecs/
+#       Linaro gcc 硬编码的绝对引用全部有效。
+# 注意: 不把 /env/qt_5.12.8_nosysroot/bin 加入全局 PATH——其含通用名 qmake/moc,
+#       会遮蔽宿主机 Qt5 qmake, 破坏 pqt 系列(linuxdeployqt)构建。
+#       pSophUI 的 release.sh 内部自行 export 自己的 qmake/gcc 到 PATH(见 source/pSophUI/release.sh)。
+# 默认不内置(约 1GB, 私有源); 加 --with-sophui-toolchain 或构建上下文放归档自动内置。
+ARG WITH_SOPHUI=0
+COPY toolchains/ /tmp/toolchains/
+RUN if [ "${WITH_SOPHUI}" = "1" ] && [ -f /tmp/toolchains/sophui-cross-toolchains.tar.zst ]; then \
+        mkdir -p /env \
+        && tar -C /env -I zstd -xf /tmp/toolchains/sophui-cross-toolchains.tar.zst \
+        && rm -f /tmp/toolchains/sophui-cross-toolchains.tar.zst; \
+    fi
+
+# ---- Qt mingw 静态库(pqt windows exe 依赖) ----
+# 构建上下文需含 qt-mingw.tar.zst 或 toolchains/qt-mingw/ 目录(由 build-qt-mingw.sh 在 20.04
+# 基座内从源码编译)。默认不内置; 加 --with-qt-mingw 构建。
+# 仅消费 qt-mingw 相关文件, 不触碰同目录下 dfss 归档。
+ARG WITH_QT_MINGW=0
+COPY toolchains/ /tmp/toolchains/
+RUN if [ "${WITH_QT_MINGW}" = "1" ] && { [ -f /tmp/toolchains/qt-mingw.tar.zst ] || [ -d /tmp/toolchains/qt-mingw ]; }; then \
+        mkdir -p /opt/qt-mingw \
+        && if [ -f /tmp/toolchains/qt-mingw.tar.zst ]; then \
+            tar -C /opt/qt-mingw -I zstd -xf /tmp/toolchains/qt-mingw.tar.zst; \
+        else \
+            cp -a /tmp/toolchains/qt-mingw/. /opt/qt-mingw/; \
+        fi \
+        && rm -rf /tmp/toolchains/qt-mingw /tmp/toolchains/qt-mingw.tar.zst; \
+    fi
+
+# ---- dfss 私有工具链(sw_64 / loongarch64) ----
 # 构建上下文需含 toolchains/ 目录(由 export-dfss-toolchains.sh 导出), 或用 --with-dfss-toolchains。
 # 注意: sw_64 工具链 gcc 编译期 prefix 硬编码为 /usr/sw/swgcc830_cross_tools,
 #       loongarch64 硬编码为 /env/loongson-gnu-toolchain-8.3-x86_64-loongarch64-linux-gnu-rc1.1,
 #       故解压到容器内原始路径, 保证绝对引用全部有效(与 13.24 源容器一致)。
+# 重要: 不把 /usr/sw/.../bin 加入全局 PATH——其含通用名 ldd(sw64 glibc 版), 会遮蔽系统 ldd,
+#       破坏 linuxdeployqt/pqt 等对宿主 ldd 的依赖(对 x86 二进制的解析)。dfss 工具链仅
+#       pdfss_cpp 需要, 由 build-all.sh 的 EXTRA_ENV 按子项目注入 PATH。
 ARG WITH_DFSS=0
-COPY toolchains/ /tmp/toolchains/
-RUN if [ "${WITH_DFSS}" = "1" ] || [ -n "$(ls /tmp/toolchains 2>/dev/null)" ]; then \
+RUN if { [ "${WITH_DFSS}" = "1" ] || [ -n "$(ls /tmp/toolchains 2>/dev/null)" ]; } \
+       && { [ -f /tmp/toolchains/swgcc830_cross_tools.tar.zst ] || [ -f /tmp/toolchains/loongarch64-cross-tools.tar.zst ]; }; then \
         if [ -f /tmp/toolchains/swgcc830_cross_tools.tar.zst ]; then \
             mkdir -p /usr/sw \
             && tar -C /usr/sw -I zstd -xf /tmp/toolchains/swgcc830_cross_tools.tar.zst; \
@@ -127,13 +178,14 @@ RUN if [ "${WITH_DFSS}" = "1" ] || [ -n "$(ls /tmp/toolchains 2>/dev/null)" ]; t
         fi \
         && rm -rf /tmp/toolchains; \
     fi
-ENV DFSS_TOOLCHAIN_ROOT="/usr/sw/swgcc830_cross_tools" \
-    PATH="/usr/sw/swgcc830_cross_tools/usr/bin:/env/loongson-gnu-toolchain-8.3-x86_64-loongarch64-linux-gnu-rc1.1/bin:${PATH}"
+ENV DFSS_TOOLCHAIN_ROOT="/usr/sw/swgcc830_cross_tools"
 
 # ---- 工作区约定 ----
 WORKDIR /workspace
 RUN git config --global --add safe.directory "*" \
     && printf '#!/bin/bash\nif [ -x /usr/sw/swgcc830_cross_tools/usr/bin/sw_64-sunway-linux-gnu-gcc ] && [ -x /env/loongson-gnu-toolchain-8.3-x86_64-loongarch64-linux-gnu-rc1.1/bin/loongarch64-linux-gnu-gcc ]; then\n  echo "[sophon-tools-build] dfss 私有工具链已就绪 (sw_64 + loongarch64)"\nelse\n  echo "[sophon-tools-build] dfss 私有工具链未内置 (构建时加 --with-dfss-toolchains)"\nfi\n' > /usr/local/bin/dfss-check \
-    && chmod +x /usr/local/bin/dfss-check
+    && chmod +x /usr/local/bin/dfss-check \
+    && printf '#!/bin/bash\nif [ -x /env/qt_5.12.8_nosysroot/bin/qmake ] && [ -x /env/gcc-linaro-6.3.1-2017.05-x86_64_aarch64-linux-gnu/bin/aarch64-linux-gnu-gcc ]; then\n  echo "[sophon-tools-build] pSophUI 交叉工具链已就绪 (aarch64 Qt 5.12.8 + Linaro GCC 6.3)"\nelse\n  echo "[sophon-tools-build] pSophUI 交叉工具链缺失"\nfi\n' > /usr/local/bin/sophui-check \
+    && chmod +x /usr/local/bin/sophui-check
 
 CMD ["/bin/bash"]
