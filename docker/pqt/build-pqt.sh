@@ -36,6 +36,8 @@ fi
 PROJECT="pqt_memory_edit"
 MODE=""  # linux / windows / all
 INPLACE="${PQT_INPLACE:-0}"
+VERSION=""       # 显式版本号（透传给 linux_release.sh / CMake）
+OUTPUT_DIR=""    # 产物目录（透传给 linux_release.sh 作为工作目录）
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -44,6 +46,8 @@ while [[ $# -gt 0 ]]; do
     --windows) MODE="windows" ;;
     --all) MODE="all" ;;
     --inplace) INPLACE=1 ;;
+    --version) VERSION="$2"; shift 2; continue ;;
+    --output) OUTPUT_DIR="$2"; shift 2; continue ;;
     --image) PQT_IMAGE="$2"; shift 2; continue ;;
     -h|--help)
       grep -E '^#' "$0" | sed 's/^# \{0,1\}//' | head -35
@@ -104,9 +108,12 @@ setup_mingw_headers() {
 # ---- linux 端: AppImage ----
 build_linux() {
   prepare_memory_edit_tarxz
+  # linux_release.sh 工作目录：产物与中间文件只写这里，不污染源码树
+  local work="${OUTPUT_DIR:-${SRC_DIR}/.build}"
+  mkdir -p "${work}"
   if [[ "${INPLACE}" = "1" ]]; then
     echo "==> (inplace) 构建 ${PROJECT} linux AppImage ..."
-    (cd "${SRC_DIR}" && bash linux_release.sh)
+    (cd "${SRC_DIR}" && bash linux_release.sh "${work}" "${VERSION}")
     echo "==> linux AppImage 完成"
     return 0
   fi
@@ -123,10 +130,11 @@ build_linux() {
   docker run --rm --privileged \
     -v /dev:/dev \
     -v "${SRC_DIR}":/root/workspace \
+    -v "${work}":/pqt-output \
     -w /root/workspace \
     "${PQT_IMAGE}" /bin/bash -c "
       git config --global --add safe.directory /root/workspace
-      bash linux_release.sh
+      bash linux_release.sh /pqt-output ${VERSION}
     " 2>&1 | tail -20
   echo "==> linux AppImage 完成"
 }
@@ -153,9 +161,10 @@ build_windows() {
     # 直接在统一镜像内执行(工具链已内置, 当前 shell 内函数可直接使用)
     setup_mingw_posix
     setup_mingw_headers
-    cd "${SRC_DIR}"
-    rm -rf build-win
-    mkdir build-win && cd build-win
+    # out-of-source: 构建目录放 OUTPUT_DIR（未传则退回源码树 build-win），不污染源码树
+    local wdir="${OUTPUT_DIR:-${SRC_DIR}/build-win}"
+    mkdir -p "${wdir}"
+    cd "${wdir}"
     export QT_PLATFORM_DIR="${qt_prefix}"
     export QT_GCC_PLATFORM_DIR=/opt/mingw-posix/bin
     cat > /tmp/tc.cmake <<TOOL
@@ -168,20 +177,27 @@ set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 TOOL
-    cmake .. -DCMAKE_TOOLCHAIN_FILE=/tmp/tc.cmake -DCMAKE_BUILD_TYPE=Release \
-      "-DCMAKE_CXX_FLAGS=-I/tmp/mingw-inc" "-DCMAKE_C_FLAGS=-I/tmp/mingw-inc"
+    cmake "${SRC_DIR}" -DCMAKE_TOOLCHAIN_FILE=/tmp/tc.cmake -DCMAKE_BUILD_TYPE=Release \
+      "-DCMAKE_CXX_FLAGS=-I/tmp/mingw-inc" "-DCMAKE_C_FLAGS=-I/tmp/mingw-inc" \
+      ${VERSION:+-DMY_PROJECT_VERSION=${VERSION}}
     make -j"$(nproc)"
+    # windeployqt/openssl 拷贝/静态改名打包步骤挂在 install() 上，必须 make install 才能产出自包含 exe
+    make install
     echo "==> windows exe 产物:"
-    ls -la qt_mem_edit*.exe 2>/dev/null || ls -la *.exe
+    find . -maxdepth 3 -name '*.exe' | head -5
     return 0
   fi
 
-  # 宿主模式: 在 sophon-tools-build 镜像内交叉编译
+  # 宿主模式: 在 sophon-tools-build 镜像内交叉编译（out-of-source: 构建目录为 OUTPUT_DIR）
   local image="${IMAGE:-sophon-tools-build:unified}"
+  local wdir="${OUTPUT_DIR:-${SRC_DIR}/build-win}"
+  mkdir -p "${wdir}"
   docker run --rm \
     -v "${SRC_DIR}":/workspace/src \
+    -v "${wdir}":/pqt-win-output \
     -v "${qt_prefix}":/opt/qt-mingw \
-    -w /workspace/src \
+    -e PQT_WIN_OUT="/pqt-win-output" \
+    -e PQT_VERSION="${VERSION}" \
     "${image}" bash -c '
       set -e
       export DEBIAN_FRONTEND=noninteractive
@@ -211,16 +227,17 @@ set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 TOOL
-      cd /workspace/src
-      rm -rf build-win
-      mkdir build-win && cd build-win
       export QT_PLATFORM_DIR=/opt/qt-mingw
       export QT_GCC_PLATFORM_DIR=/opt/mingw-posix/bin
-      cmake .. -DCMAKE_TOOLCHAIN_FILE=/tmp/tc.cmake -DCMAKE_BUILD_TYPE=Release \
-        "-DCMAKE_CXX_FLAGS=-I/tmp/mingw-inc" "-DCMAKE_C_FLAGS=-I/tmp/mingw-inc"
+      mkdir -p "${PQT_WIN_OUT}" && cd "${PQT_WIN_OUT}"
+      cmake /workspace/src -DCMAKE_TOOLCHAIN_FILE=/tmp/tc.cmake -DCMAKE_BUILD_TYPE=Release \
+        "-DCMAKE_CXX_FLAGS=-I/tmp/mingw-inc" "-DCMAKE_C_FLAGS=-I/tmp/mingw-inc" \
+        ${PQT_VERSION:+-DMY_PROJECT_VERSION=${PQT_VERSION}}
       make -j$(nproc)
+      # windeployqt/openssl 拷贝/静态改名打包步骤挂在 install() 上，必须 make install 才能产出自包含 exe
+      make install
       echo "==> windows exe 产物:"
-      ls -la qt_mem_edit*.exe 2>/dev/null || ls -la *.exe
+      find . -maxdepth 3 -name '*.exe' | head -5
     '
 }
 
