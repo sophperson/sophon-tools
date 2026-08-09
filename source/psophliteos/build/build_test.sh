@@ -1,4 +1,7 @@
 #!/bin/sh
+# 废弃：旧 tgz 构建流程（build_test），已被统一构建接口替换。
+# 请使用仓库根的 `bash release.sh [ARCH] [VERSION]`（M1 规范）或
+# `build/build-deb-sophliteos.sh <VERSION> <soc|pcie>` 直接出 deb。保留仅供回溯。
 set -e
 
 current_directory=${PWD##*/}

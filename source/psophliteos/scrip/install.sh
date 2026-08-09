@@ -1,4 +1,6 @@
 #!/bin/bash
+# 废弃：旧 tgz 流程的部署脚本（/etc/sophliteos、/var/lib/sophliteos 为旧路径残留），
+# 已被 deb 安装流程替换（dpkg -i 即装到 /opt/sophon/sophliteos）。保留仅供回溯。
 
 set -e
 

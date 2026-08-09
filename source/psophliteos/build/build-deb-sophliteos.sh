@@ -24,9 +24,9 @@ bash build/version.sh "V$VERSION"
 # 2. 前端 dist（本地 pnpm，无 docker；无 node_modules 时自动 install）
 cd frontend
 if [ ! -d node_modules ]; then
-  pnpm install 2>/dev/null || yarn install
+  pnpm install || yarn install
 fi
-pnpm run build 2>/dev/null || yarn build
+pnpm run build || yarn build
 cd ..
 cp -r frontend/dist dist
 
@@ -59,10 +59,10 @@ install -m 0644 config/sophliteos.yaml "$STAGE/opt/sophon/sophliteos/config/soph
 cp -r dist/. "$STAGE/opt/sophon/sophliteos/dist/"
 install -m 0644 release_version.txt "$STAGE/opt/sophon/sophliteos/release_version.txt"
 
-# 5. DEBIAN 控制信息（模板注入 Version + Architecture）
+# 5. DEBIAN 控制信息（模板注入 Version + Architecture；@ARCH@ 位于 Description 前，
+#    符合 deb-policy 字段序，不再追加到 control 尾部）
 SRC_DEBIAN=build/sophliteos/DEBIAN
-sed "s/@VERSION@/$VERSION/" "$SRC_DEBIAN/control.bak" > "$STAGE/DEBIAN/control"
-printf 'Architecture: %s\n' "$ARCH" >> "$STAGE/DEBIAN/control"
+sed -e "s/@VERSION@/$VERSION/" -e "s/@ARCH@/$ARCH/" "$SRC_DEBIAN/control.bak" > "$STAGE/DEBIAN/control"
 cp "$SRC_DEBIAN/conffiles" "$STAGE/DEBIAN/conffiles"
 cp "$SRC_DEBIAN/postinst" "$STAGE/DEBIAN/postinst"
 cp "$SRC_DEBIAN/prerm"    "$STAGE/DEBIAN/prerm"

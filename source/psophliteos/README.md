@@ -18,31 +18,41 @@
 
 ## 编译依赖
 - go >= 1.19
-- `gcc-aarch64-linux-gnu`（arm64 交叉编译）：`sudo apt-get install gcc-aarch64-linux-gnu`
-- docker（前端在 node:16 容器中构建）
+- arm64 静态交叉编译需要 aarch64-linux-musl-gcc（由 `build/fetch-musl-toolchain.sh` 自动下载，也可用系统包预装）
+- 前端构建需要 pnpm（或 yarn 兜底）
 
-## 构建
-前端源码已在本目录 `frontend/` 下，**无需 clone**。进入 build 目录执行：
+## 构建（统一接口，推荐）
+
+前端源码已在本目录 `frontend/` 下，**无需 clone**。在子项目根执行：
+
 ```bash
-cd build
-./build_2_release.sh
+bash release.sh [arm64|amd64|all] [VERSION]   # 默认 arm64 / 2.1.0
 ```
-（若 docker 需 root：`sudo ./build_2_release.sh`，且 root 的 PATH 需含 go）
+
+或直接出单个 deb：
+
+```bash
+bash build/build-deb-sophliteos.sh [VERSION] [soc|pcie]
+```
+
+产物落到 `release/`（`OUTPUT_DIR` 可指定输出目录），如 `release/sophliteos_soc_2.1.0.deb`、`release/sophliteos_pcie_2.1.0.deb`。
+
+> `build/build_2_release.sh`、`build/build_test.sh`、`scrip/package.sh`、`build/package-deb-sdk.sh`
+> 是旧 docker-node16 + tgz 流程，已废弃，仅供回溯。
 
 ## 产物
 ```
 release/
-├── sophliteos-linux_amd64.tgz
-├── sophliteos-linux_arm64.tgz
-├── sophliteos_pcie_1.1.2.deb
-├── sophliteos_soc_1.1.2.deb
-├── sophliteos_pcie_1.1.2_sdk.deb
-└── sophliteos_soc_1.1.2_sdk.deb
+├── sophliteos_soc_2.1.0.deb      # arm64 设备版
+└── sophliteos_pcie_2.1.0.deb     # amd64 开发机版
 ```
 
 ## 安装运行
-- x86: `tar -xvf sophliteos-linux_amd64.tgz && sudo ./install.sh` 或 `sudo dpkg -i sophliteos_pcie_1.1.2.deb`
-- arm: `tar -xvf sophliteos-linux_arm64.tgz && sudo ./install.sh` 或 `sudo dpkg -i sophliteos_soc_1.1.2.deb`
+```bash
+sudo dpkg -i release/sophliteos_soc_2.1.0.deb     # arm 设备
+sudo dpkg -i release/sophliteos_pcie_2.1.0.deb    # x86 开发机
+```
+安装后由 systemd 服务 `sophliteos` 拉起，监听 :8080。
 
 ---
 

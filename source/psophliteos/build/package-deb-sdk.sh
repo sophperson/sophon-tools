@@ -1,4 +1,6 @@
 #!/bin/bash
+# 废弃：旧 tgz 流程的 SDK deb 打包，已被统一构建接口替换。
+# 请使用 `build/build-deb-sophliteos.sh <VERSION> <soc|pcie>` 直接出 deb。保留仅供回溯。
 
 set -e
 

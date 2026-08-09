@@ -22,6 +22,23 @@ esac
 
 mkdir -p "$OUTPUT_DIR"
 
+# pnpm install/run 会在 lock 与 package.json 不一致时改写 frontend/pnpm-lock.yaml
+# （该文件被 git 跟踪），导致每次统一构建弄脏工作区（docker 挂载源码树）。
+# 构建前备份、退出时还原，保证构建不影响 git 工作区。
+LOCKFILE="$SCRIPT_DIR/frontend/pnpm-lock.yaml"
+LOCKFILE_BACKUP=""
+if [ -f "$LOCKFILE" ]; then
+  LOCKFILE_BACKUP="$(mktemp)"
+  cp "$LOCKFILE" "$LOCKFILE_BACKUP"
+fi
+restore_lockfile() {
+  if [ -n "$LOCKFILE_BACKUP" ] && [ -f "$LOCKFILE_BACKUP" ]; then
+    cp "$LOCKFILE_BACKUP" "$LOCKFILE" 2>/dev/null || true
+    rm -f "$LOCKFILE_BACKUP"
+  fi
+}
+trap restore_lockfile EXIT
+
 # 前端依赖预装：build-deb-sophliteos.sh 内 pnpm 失败会退到 yarn（慢且易挂），
 # 这里先用 pnpm --no-frozen-lockfile 显式装好（M2 实测路径），node_modules 复用。
 prepare_frontend() {

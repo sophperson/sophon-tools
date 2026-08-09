@@ -13,7 +13,10 @@ TOOLCHAIN_URL="https://musl.cc/${TOOLCHAIN_NAME}.tgz"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TOOLCHAIN_ROOT="${MUSL_TOOLCHAIN_ROOT:-${SCRIPT_DIR}/toolchain}"
 TOOLCHAIN_DIR="${TOOLCHAIN_ROOT}/${TOOLCHAIN_NAME}"
-EXPECTED_SHA256="${MUSL_TOOLCHAIN_SHA256:-}"
+# 可重复性:固定默认哈希（与 docker/versions.env 的 MUSL_AARCH64_SHA256 一致，
+# 2026-08-09 拉取）。musl.cc 为滚动发布,上游更新后需同步重算哈希;
+# 环境变量 MUSL_TOOLCHAIN_SHA256 可覆盖（例如临时升级工具链）。
+EXPECTED_SHA256="${MUSL_TOOLCHAIN_SHA256:-c909817856d6ceda86aa510894fa3527eac7989f0ef6e87b5721c58737a06c38}"
 
 # 1) 系统 PATH 已有该工具链,直接退出(不输出,沿用系统)
 if command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then
