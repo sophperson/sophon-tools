@@ -1,5 +1,6 @@
 #!/bin/bash
-# x86 构建
+# x86 构建（开发机/PCIE 主机定位：宿主 gcc 动态链接，非部署镜像标准；
+# 设备端使用 arm64 的 musl 全静态产物 —— build-bmssm-arm64.sh）
 set -e
 cd "$(dirname "$0")/.."
 VERSION="${1:-2.1.0}"

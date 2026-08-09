@@ -8,6 +8,8 @@ set -e
 
 cd "$(dirname "$0")/.."
 VERSION="${1:-2.1.0}"
+# 版本号不允许进入 sed 替换分隔符；若含 / 则替换为 -（同时保持产物名一致）
+VERSION="${VERSION//\//-}"
 ARCH="${2:-arm64}"
 
 # 1. 交叉编译静态二进制 + 打包 bmssm.yaml 到 release/
@@ -32,6 +34,8 @@ cp release/bmssm.yaml "$DEBROOT/opt/sophon/bmssm/config/bmssm.yaml"
 cp build/bmssm.service "$DEBROOT/usr/lib/systemd/system/bmssm.service"
 
 # 3. DEBIAN 控制文件（Version/Architecture 注入）
+#    注: ARCH 未过 dpkg-architecture 映射，当前 arm64/amd64 即 Debian 架构名；
+#        未来扩展 armhf/armel 等时需映射。
 sed -e "s/@VERSION@/$VERSION/" -e "s/@ARCH@/$ARCH/" \
   build/deb/bmssm.control > "$DEBROOT/DEBIAN/control"
 cp build/deb/postinst "$DEBROOT/DEBIAN/postinst"
