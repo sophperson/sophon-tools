@@ -14,12 +14,12 @@ def get_architecture():
         if system == 'linux':
             return 'linux-amd64'
         elif system == 'windows':
-            return 'win-i686.exe'
+            return 'win-amd64.exe'
     if arch == 'amd64':
         if system == 'linux':
             return 'linux-amd64'
         elif system == 'windows':
-            return 'win-i686.exe'
+            return 'win-amd64.exe'
     elif arch == 'i686' or arch == 'x86':
         if system == 'windows':
             return 'win-i686.exe'
