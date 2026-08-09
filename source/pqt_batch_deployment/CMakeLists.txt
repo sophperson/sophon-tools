@@ -26,7 +26,9 @@ endif(CMAKE_SYSTEM_NAME MATCHES "Windows")
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
 
-set(MY_PROJECT_VERSION "V1.4.1")
+if(NOT DEFINED MY_PROJECT_VERSION)
+  set(MY_PROJECT_VERSION "V1.4.1")
+endif()
 configure_file(
   "${CMAKE_SOURCE_DIR}/version.h.in"
   "${CMAKE_BINARY_DIR}/version.h"
