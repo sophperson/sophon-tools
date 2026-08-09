@@ -60,25 +60,38 @@ pushd "$BUILD_DIR" >/dev/null
   "$QMAKE" SophUI.pro
 
   # 编译（post-link 的 upx 步骤失败仅告警，不影响二进制产出）
-  make -j"$(nproc)" 2>&1 | tail -5 || {
-    echo "WARN: make 有非零退出（多为尾部 upx 缺失），检查二进制是否已生成" >&2
-  }
+  # make 返回非零时可能只是尾部 upx 缺失（二进制已生成），也可能是真编译失败。
+  # 以二进制 mtime 是否新于 Makefile 区分：真失败时残留旧二进制会早于刚生成的 Makefile。
+  MAKE_RC=0
+  make -j"$(nproc)" 2>&1 | tail -5 || MAKE_RC=1
 
   BIN="SophUI"
   if [ ! -f "$BIN" ]; then
     echo "ERROR: 未生成 $BIN" >&2
     exit 1
   fi
+  if [ "$MAKE_RC" != "0" ]; then
+    if [ "$BIN" -ot "Makefile" ]; then
+      echo "ERROR: make 失败且二进制早于 Makefile（残留旧产物），中止打包" >&2
+      exit 1
+    fi
+    echo "WARN: make 有非零退出（多为尾部 upx 缺失），二进制已更新，继续" >&2
+  fi
   file "$BIN" | head -1
 
-  # 打 deb（复用工程内 deb 数据树）
+  # 打 deb：复制 deb 数据树到临时目录再修改，避免 sed -i 污染仓库跟踪的 control。
+  # 二进制拷到与运行脚本/服务一致的 /bm_services/SophonHDMI/ 布局
+  # （run_hdmi_show.sh、SophonHDMI.service 均从该路径启动 SophUI）。
   if [ -d deb ] && command -v dpkg-deb >/dev/null 2>&1; then
-    DEST_DIR=deb/opt/sophon/SophUI/bin
+    DEB_TMP="$(mktemp -d "${TMPDIR:-/tmp}/pSophUI-deb.XXXXXX")"
+    cp -a deb/. "$DEB_TMP/"
+    DEST_DIR="$DEB_TMP/bm_services/SophonHDMI"
     mkdir -p "$DEST_DIR"
     cp -f "$BIN" "$DEST_DIR/"
     DEST_VER="${VERSION}"
-    sed -i "s/1\.6\.8/${DEST_VER}/" deb/DEBIAN/control 2>/dev/null || true
-    dpkg-deb --root-owner-group -b deb "$OUTPUT_DIR/sophgo-hdmi_${DEST_VER}_arm64.deb" 2>&1 | tail -2 || true
+    sed -i "s/1\.6\.8/${DEST_VER}/" "$DEB_TMP/DEBIAN/control"
+    dpkg-deb --root-owner-group -b "$DEB_TMP" "$OUTPUT_DIR/sophgo-hdmi_${DEST_VER}_arm64.deb" 2>&1 | tail -2 || true
+    rm -rf "$DEB_TMP"
     cp -f "$BIN" "$OUTPUT_DIR/SophUI_arm64"
   else
     cp -f "$BIN" "$OUTPUT_DIR/SophUI_arm64"

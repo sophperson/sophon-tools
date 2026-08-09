@@ -42,7 +42,7 @@ while true; do
 		status=$(find /sys -name "hdmi_status" 2>/dev/null)
 		path1="$status/status"
 	fi
-	STATUS=$(cat $path1 2>/dev/null)
+	STATUS=$(cat "$path1" 2>/dev/null)
 	if [ $? -eq 1 ]; then
 		STATUS="0"
 	fi
