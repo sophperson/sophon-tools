@@ -31,6 +31,7 @@ ARG GO_VERSION GO_TARBALL_URL GO_TARBALL_SHA256
 ARG RUST_VERSION
 ARG NODE_TARBALL_URL NODE_TARBALL_SHA256
 ARG PNPM_VERSION YARN_VERSION
+ARG MUSL_AARCH64_URL MUSL_AARCH64_SHA256 MUSL_X86_64_URL MUSL_X86_64_SHA256
 ARG WITH_DFSS=0
 ARG WITH_QT_MINGW=0
 ARG WITH_SOPHUI=0
@@ -117,11 +118,15 @@ RUN rustup target add aarch64-unknown-linux-musl aarch64-unknown-linux-gnu \
     && printf '[target.aarch64-unknown-linux-musl]\nlinker = "aarch64-linux-musl-gcc"\nrustflags = ["-C", "link-arg=-s"]\n' > "${CARGO_HOME}/config.toml"
 
 # ---- musl 交叉工具链(静态链接: pbmssm/psophliteos/pbm_set_ip) ----
-# 预置 aarch64 + x86_64; 若构建期网络受限, 子项目脚本会自行从 musl.cc 拉取。
+# 预置 aarch64 + x86_64; 下载即校验 SHA256(versions.env 锁定); 若构建期网络受限,
+# 子项目脚本会自行从 musl.cc 拉取。
+ARG MUSL_AARCH64_URL MUSL_AARCH64_SHA256 MUSL_X86_64_URL MUSL_X86_64_SHA256
 RUN mkdir -p /opt/musl \
-    && curl -fsSL "https://musl.cc/aarch64-linux-musl-cross.tgz" -o /tmp/musl-aarch64.tgz \
+    && curl -fsSL "${MUSL_AARCH64_URL}" -o /tmp/musl-aarch64.tgz \
+    && echo "${MUSL_AARCH64_SHA256}  /tmp/musl-aarch64.tgz" | sha256sum -c - \
     && tar -C /opt/musl -xzf /tmp/musl-aarch64.tgz && rm /tmp/musl-aarch64.tgz \
-    && curl -fsSL "https://musl.cc/x86_64-linux-musl-cross.tgz" -o /tmp/musl-x86_64.tgz \
+    && curl -fsSL "${MUSL_X86_64_URL}" -o /tmp/musl-x86_64.tgz \
+    && echo "${MUSL_X86_64_SHA256}  /tmp/musl-x86_64.tgz" | sha256sum -c - \
     && tar -C /opt/musl -xzf /tmp/musl-x86_64.tgz && rm /tmp/musl-x86_64.tgz \
     && aarch64-linux-musl-gcc --version | head -1 && x86_64-linux-musl-gcc --version | head -1
 
