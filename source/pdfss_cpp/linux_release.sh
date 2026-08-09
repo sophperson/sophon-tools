@@ -9,7 +9,7 @@ if [[ "$2" == "lib" ]]; then
 fi
 
 NEED_DEBUG=0
-if [[ "$3" == "debug" ]]; then
+if [[ "${3:-}" == "debug" ]]; then
 	NEED_DEBUG=1
 fi
 

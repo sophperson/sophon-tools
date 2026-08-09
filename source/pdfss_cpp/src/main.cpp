@@ -555,7 +555,6 @@ int64_t sftp_get_file(struct ServerInfo* server, string path,
       libssh2_sftp_open(sftp_session, path.c_str(), LIBSSH2_FXF_READ, 0);
   if (!sftp_handle) {
     log_error("Unable to open file with SFTP");
-    libssh2_sftp_close(sftp_handle);
     libssh2_sftp_shutdown(sftp_session);
     libssh2_session_disconnect(session, "Normal Shutdown");
     libssh2_session_free(session);
@@ -784,8 +783,7 @@ int64_t sftp_put_file(struct ServerInfo* server, string local_path,
       LIBSSH2_SFTP_S_IRUSR | LIBSSH2_SFTP_S_IWUSR | LIBSSH2_SFTP_S_IRGRP |
           LIBSSH2_SFTP_S_IROTH);
   if (!sftp_handle) {
-    log_error("Unable to open file with SFTP: %s", remote_path);
-    libssh2_sftp_close(sftp_handle);
+    log_error("Unable to open file with SFTP: %s", remote_path.c_str());
     libssh2_sftp_shutdown(sftp_session);
     libssh2_session_disconnect(session, "Normal Shutdown");
     libssh2_session_free(session);
@@ -1072,7 +1070,22 @@ bool starts_with(const std::string& str, const std::string& prefix) {
          str.compare(0, prefix.size(), prefix) == 0;
 }
 
+// 用户名会被拼进 system() 的 sftp 命令，限制为安全字符集，避免 shell 注入。
+bool is_safe_username(const std::string& username) {
+  for (char c : username) {
+    if (!(isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.' ||
+          c == '-')) {
+      return false;
+    }
+  }
+  return !username.empty();
+}
+
 void sftp_login(string username) {
+  if (!is_safe_username(username)) {
+    log_error("invalid username: %s", username.c_str());
+    return;
+  }
   struct ServerInfo* login_info;
   if (starts_with(username, "sophgo") || starts_with(username, "h_s")) {
     log_info("%s sftp login hdk server", username.c_str());
@@ -1214,8 +1227,10 @@ bool sftp_upfile(std::string upflag, std::string upfile) {
     return false;
   }
   ServerInfo upload_server = *server;  // 使用副本，不修改全局服务器列表
-  upload_server.user = "customerUploadAccount";
-  upload_server.pass = "1QQHJONFflnI2BLsxUvA";
+  const char* upload_user = getenv("DFSS_UPLOAD_USER");
+  const char* upload_pass = getenv("DFSS_UPLOAD_PASS");
+  upload_server.user = upload_user ? upload_user : "customerUploadAccount";
+  upload_server.pass = upload_pass ? upload_pass : "1QQHJONFflnI2BLsxUvA";
   if (sftp_put_file(&upload_server, upfile, base64_decode(upflag)) > 0) return true;
   return false;
 }

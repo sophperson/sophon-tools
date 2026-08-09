@@ -1,5 +1,7 @@
 #! /bin/bash
 
+set -e
+
 unset build_shell
 build_shell="$(dirname "$(readlink -f "$0")")"
 
@@ -39,7 +41,7 @@ if [[ "$1" == "host" ]]; then
 
 	## zlib static
 	pushd "${build_shell}/zlib"
-	CC=${CROSS_COMPILE}gcc ./configure --prefix="${build_target}" --static
+	CC=gcc ./configure --prefix="${build_target}" --static
 	make clean
 	make -j$(nproc)
 	make install -j$(nproc)
@@ -71,7 +73,7 @@ elif [[ "$1" == "aarch64" ]]; then
 
 	## zlib static
 	pushd "${build_shell}/zlib"
-	CC=${CROSS_COMPILE}gcc CC=${CROSS_COMPILE}gcc ./configure --prefix="${build_target}" --static
+	CC=${CROSS_COMPILE}gcc CFLAGS="-O3 -fPIC" ./configure --prefix="${build_target}" --static
 	make clean
 	make -j$(nproc)
 	make install -j$(nproc)
@@ -99,7 +101,7 @@ elif [[ "$1" == "aarch64" ]]; then
 
 	## libssh2 static
 	pushd "${build_shell}/libssh2"
-	make clean
+	make clean 2>/dev/null || true
 
 	./configure --disable-examples-build --disable-sshd-tests --disable-docker-tests --host=aarch64-linux-gnu --with-sysroot="${build_target}" --enable-static=yes --enable-shared=no --with-libmbedcrypto-prefix="${build_target}" --prefix="${build_target}" --with-crypto=mbedtls --with-libz --with-libz-prefix="${build_target}"
 	unset CC
@@ -119,7 +121,7 @@ elif [[ "$1" == "mingw64" ]]; then
 
 	## zlib static
 	pushd "${build_shell}/zlib"
-	CC=${CROSS_COMPILE}gcc ./configure --prefix="${build_target}" --static
+	CC=${CROSS_COMPILE}gcc CFLAGS="-O3 -fPIC" ./configure --prefix="${build_target}" --static
 	make clean
 	make -j$(nproc)
 	make install -j$(nproc)
@@ -147,7 +149,7 @@ elif [[ "$1" == "mingw64" ]]; then
 
 	## libssh2 static
 	pushd "${build_shell}/libssh2"
-	make clean
+	make clean 2>/dev/null || true
 
 	./configure --host=x86_64-pc-mingw64 --disable-examples-build --disable-sshd-tests --disable-docker-tests --with-sysroot="${build_target}" --enable-static=yes --enable-shared=no --with-libmbedcrypto-prefix="${build_target}" --prefix="${build_target}" --with-crypto=mbedtls --with-libz --with-libz-prefix="${build_target}"
 	unset CC
@@ -168,7 +170,7 @@ elif [[ "$1" == "mingw" ]]; then
 
 	## zlib static
 	pushd "${build_shell}/zlib"
-	CC=${CROSS_COMPILE}gcc ./configure --prefix="${build_target}" --static
+	CC=${CROSS_COMPILE}gcc CFLAGS="-O3 -fPIC" ./configure --prefix="${build_target}" --static
 	make clean
 	make -j$(nproc)
 	make install -j$(nproc)
@@ -196,7 +198,7 @@ elif [[ "$1" == "mingw" ]]; then
 
 	## libssh2 static
 	pushd "${build_shell}/libssh2"
-	make clean
+	make clean 2>/dev/null || true
 
 	./configure --host=i686-pc-mingw32 --disable-examples-build --disable-sshd-tests --disable-docker-tests --with-sysroot="${build_target}" --enable-static=yes --enable-shared=no --with-libmbedcrypto-prefix="${build_target}" --prefix="${build_target}" --with-crypto=mbedtls --with-libz --with-libz-prefix="${build_target}"
 	unset CC
@@ -217,7 +219,7 @@ elif [[ "$1" == "loongarch64" ]]; then
 
 	## zlib static
 	pushd "${build_shell}/zlib"
-	CC=${CROSS_COMPILE}gcc ./configure --prefix="${build_target}" --static
+	CC=${CROSS_COMPILE}gcc CFLAGS="-O3 -fPIC" ./configure --prefix="${build_target}" --static
 	make clean
 	make -j$(nproc)
 	make install -j$(nproc)
@@ -245,7 +247,7 @@ elif [[ "$1" == "loongarch64" ]]; then
 
 	## libssh2 static
 	pushd "${build_shell}/libssh2"
-	make clean
+	make clean 2>/dev/null || true
 
 	./configure --host=loongarch64-pc-linux --disable-examples-build --disable-sshd-tests --disable-docker-tests --with-sysroot="${build_target}" --enable-static=yes --enable-shared=no --with-libmbedcrypto-prefix="${build_target}" --prefix="${build_target}" --with-crypto=mbedtls --with-libz --with-libz-prefix="${build_target}"
 	unset CC
@@ -266,7 +268,7 @@ elif [[ "$1" == "riscv64" ]]; then
 
 	## zlib static
 	pushd "${build_shell}/zlib"
-	CC=${CROSS_COMPILE}gcc ./configure --prefix="${build_target}" --static
+	CC=${CROSS_COMPILE}gcc CFLAGS="-O3 -fPIC" ./configure --prefix="${build_target}" --static
 	make clean
 	make -j$(nproc)
 	make install -j$(nproc)
@@ -294,7 +296,7 @@ elif [[ "$1" == "riscv64" ]]; then
 
 	## libssh2 static
 	pushd "${build_shell}/libssh2"
-	make clean
+	make clean 2>/dev/null || true
 
 	./configure --host=riscv64-pc-linux --disable-examples-build --disable-sshd-tests --disable-docker-tests --with-sysroot="${build_target}" --enable-static=yes --enable-shared=no --with-libmbedcrypto-prefix="${build_target}" --prefix="${build_target}" --with-crypto=mbedtls --with-libz --with-libz-prefix="${build_target}"
 	unset CC
@@ -315,7 +317,7 @@ elif [[ "$1" == "armbi" ]]; then
 
 	## zlib static
 	pushd "${build_shell}/zlib"
-	CC=${CROSS_COMPILE}gcc ./configure --prefix="${build_target}" --static
+	CC=${CROSS_COMPILE}gcc CFLAGS="-O3 -fPIC" ./configure --prefix="${build_target}" --static
 	make clean
 	make -j$(nproc)
 	make install -j$(nproc)
@@ -339,7 +341,7 @@ elif [[ "$1" == "armbi" ]]; then
 
 	## libssh2 static
 	pushd "${build_shell}/libssh2"
-	make clean
+	make clean 2>/dev/null || true
 
 	./configure --host=arm-pc-linux --disable-examples-build --disable-sshd-tests --disable-docker-tests --with-sysroot="${build_target}" --enable-static=yes --enable-shared=no --with-libmbedcrypto-prefix="${build_target}" --prefix="${build_target}" --with-crypto=mbedtls --with-libz --with-libz-prefix="${build_target}"
 	unset CC
@@ -361,7 +363,7 @@ elif [[ "$1" == "sw_64" ]]; then
 
 	## zlib static
 	pushd "${build_shell}/zlib"
-	CC=${CROSS_COMPILE}gcc ./configure --prefix="${build_target}" --static
+	CC=${CROSS_COMPILE}gcc CFLAGS="-O3 -fPIC" ./configure --prefix="${build_target}" --static
 	make clean
 	make -j$(nproc)
 	make install -j$(nproc)
@@ -389,7 +391,7 @@ elif [[ "$1" == "sw_64" ]]; then
 
 	## libssh2 static
 	pushd "${build_shell}/libssh2"
-	make clean
+	make clean 2>/dev/null || true
 
 	./configure --host=alpha-pc-linux --disable-examples-build --disable-sshd-tests --disable-docker-tests --with-sysroot="${build_target}" --enable-static=yes --enable-shared=no --with-libmbedcrypto-prefix="${build_target}" --prefix="${build_target}" --with-crypto=mbedtls --with-libz --with-libz-prefix="${build_target}"
 	unset CC
