@@ -1,5 +1,13 @@
 #include "memoryedit.h"
 
+// 对作为命令参数内嵌的用户输入做 shell 单引号转义：
+// 输入中的 ' 用 '\'' 闭合，使整段内容在远程 shell 中始终作为单个字面量，
+// 防止密码等含空格/元字符的输入改写命令语义（命令注入）。
+static QString
+shellQuote(const QString& s) {
+  return "'" + QString(s).replace("'", "'\\''") + "'";
+}
+
 MemoryEdit::MemoryEdit(QWidget* iparent) {
   parent = iparent;
   QObject::connect(
@@ -324,7 +332,7 @@ MemoryEdit::comP() {
     currentDateTimeString +
     ".tgz";
   QString rex;
-  const QString sudoAu("echo " + passwd + " | sudo -S");
+  const QString sudoAu("echo " + shellQuote(passwd) + " | sudo -S");
   const QString localFile("://mem_edit_file");
   const QString remoteFile("/data/.memedit/mem_edit.tar.xz");
   const QString
@@ -333,7 +341,7 @@ MemoryEdit::comP() {
   const QString com2("tar -xaf " + remoteFile + " -C /data/.memedit/");
   const QString
   com3("pushd /data/.memedit/memory_edit;chmod +x memory_edit.sh; echo "
-    + passwd + " | sudo -S ./memory_edit.sh -p | tee memory_edit_p.log");
+    + shellQuote(passwd) + " | sudo -S ./memory_edit.sh -p | tee memory_edit_p.log");
   QStringList com3RexList;
   const QString com4("pushd /data/.memedit; tar -caf " + default_file +
     " memory_edit");
@@ -416,7 +424,7 @@ MemoryEdit::comC(bool autoRestart) {
     ".tgz";
   QString localFile("://mem_edit_file");
   QString remoteFile("/data/.memedit/mem_edit.tar.xz");
-  const QString sudoAu("echo " + passwd + " | sudo -S");
+  const QString sudoAu("echo " + shellQuote(passwd) + " | sudo -S");
   const QString com1 =
     QString("%1 rm -rf /data/.memedit && %1 mkdir -p /data/.memedit && %1 "
       "ls -lah /data/.memedit && %1 chmod 777 -R /data/.memedit").arg(sudoAu);
@@ -429,14 +437,14 @@ MemoryEdit::comC(bool autoRestart) {
       QString::number(quint64(memSet.vpp_mem) * 1024 * 1024, 16).toUpper());
   const QString
   com3("pushd /data/.memedit/memory_edit; chmod +x memory_edit.sh; echo "
-    + passwd + " | sudo -S ./memory_edit.sh -c" +
+    + shellQuote(passwd) + " | sudo -S ./memory_edit.sh -c" +
     sizeStr + " | tee memory_edit_c.log");
-  const QString com4("pushd /data/.memedit/memory_edit; echo " + passwd +
+  const QString com4("pushd /data/.memedit/memory_edit; echo " + shellQuote(passwd) +
     " | sudo -S cp *.itb /boot; sync");
   const QString com5("pushd /data/.memedit; tar -caf " + default_file +
     " memory_edit");
   const QString com6("rm -rf /data/.memedit");
-  const QString com7("echo " + passwd + " | sudo -S reboot");
+  const QString com7("echo " + shellQuote(passwd) + " | sudo -S reboot");
   QString localFilePath = localDir.filePath(default_file);
   bool ok;
   emit SI_FS("正在进行前置准备，请稍等");
