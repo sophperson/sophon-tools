@@ -169,6 +169,10 @@ docker build \
   --build-arg NODE_TARBALL_SHA256="${NODE_TARBALL_SHA256}" \
   --build-arg PNPM_VERSION="${PNPM_VERSION}" \
   --build-arg YARN_VERSION="${YARN_VERSION}" \
+  --build-arg MUSL_AARCH64_URL="${MUSL_AARCH64_URL}" \
+  --build-arg MUSL_AARCH64_SHA256="${MUSL_AARCH64_SHA256}" \
+  --build-arg MUSL_X86_64_URL="${MUSL_X86_64_URL}" \
+  --build-arg MUSL_X86_64_SHA256="${MUSL_X86_64_SHA256}" \
   "${EXTRA_ARGS[@]}" \
   -f "${DOCKER_DIR}/Dockerfile" \
   -t "${IMAGE_NAME}:${TAG}" \

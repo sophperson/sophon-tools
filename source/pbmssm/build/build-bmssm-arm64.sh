@@ -26,6 +26,8 @@ file bmssm-arm64 | grep -q 'statically linked' \
 echo "arm64 产物静态链接校验通过"
 
 mkdir -p release
+# 先清空 release/ 再落产物，避免上一架构残留（如连续 all 构建 arm64→amd64 中断）
+rm -f release/bmssm release/bmssm.yaml
 cp bmssm-arm64 release/bmssm
 cp config/bmssm.yaml release/
 echo "built release/bmssm (arm64, musl static)"
