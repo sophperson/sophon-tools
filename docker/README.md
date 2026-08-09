@@ -13,41 +13,58 @@
 ——换取构建期零镜像切换、一键全量。v1.1.0 起去掉 Linaro GCC 6.3（改用系统 apt aarch64
 工具链），较 v1.0.0（~10.1GB）省约 1.2GB。
 
-**镜像版本**：镜像 tag 由 `docker/versions.env` 的 `IMAGE_TAG` 控制（默认 `unified-v1.0.0`），
+**镜像版本**：镜像 tag 由 `docker/versions.env` 的 `IMAGE_TAG` 控制（默认 `unified-v1.1.0`），
 `release.sh` / `build-all.sh` 默认使用 `sophon-tools-build:${IMAGE_TAG}`。发布到 dfss 服务器后，
 通过 `docker load` 加载的镜像即为该 tag。
 
-## 获取镜像（两种方式）
+## 获取镜像（`build.sh` 默认自动三级回退）
 
-### 方式 1：从 dfss 服务器拉取已构建镜像（推荐，免本地构建）
+`docker/build.sh` **默认行为**（无需任何参数）：
 
-完整镜像（内置全部私有工具链）已导出并上传至 dfss 服务器，陌生开发者无需本地构建：
+1. **本地已有** `sophon-tools-build:<tag>` 镜像 → 直接使用
+2. **本地没有** → 从 dfss 服务器拉取已构建镜像并 `docker load`
+3. **dfss 拉取失败** → 回退本地从源码构建
 
 ```bash
-# 一条命令拉取 + 加载（dfss 路径见下方说明）
+# 一行命令，自动完成 本地检查 → dfss 拉取 → 本地构建
+bash docker/build.sh
+
+# 强制从 dfss 拉取（跳过本地检查）
 bash docker/build.sh --from-dfss
 
-# 或手动:
-python3 -m dfss --url=open@sophgo.com:/<dfss路径>/sophon-tools-build-unified-v1.0.0.tar.zst
-docker load -i sophon-tools-build-unified-v1.0.0.tar.zst
-# 加载后镜像 tag: sophon-tools-build:unified-v1.0.0
+# 跳过 dfss 下载，直接本地构建
+bash docker/build.sh --no-dfss
+
+# 本地构建时内置私有工具链
+bash docker/build.sh --with-dfss-toolchains --with-qt-mingw --with-sophui-toolchain
 ```
 
-> dfss 文件名约定 `<镜像名>-<tag>.tar.zst`（冒号不适合文件路径，用 `-` 分隔）。
-> dfss 路径前缀可用环境变量 `DFSS_IMAGE_BASE` 覆盖（默认 `open@sophgo.com:/`）：
-> `DFSS_IMAGE_BASE=open@sophgo.com:/some/path bash docker/build.sh --from-dfss`
+dfss 下载细节：
 
-### 方式 2：本地构建
+- dfss 文件名约定 `<镜像名>-<tag>.tar.zst`（冒号不适合文件路径，用 `-` 分隔）
+- 默认 dfss 路径前缀 `open@sophgo.com:/`，可用环境变量 `DFSS_IMAGE_BASE` 覆盖：
+  `DFSS_IMAGE_BASE=open@sophgo.com:/some/path bash docker/build.sh --from-dfss`
+- 依赖 `python3 -m dfss`（dfss-cpp 客户端），从 sophgo sftp 服务器下载
+
+### 手动拉取（等价命令）
+
+```bash
+python3 -m dfss --url=open@sophgo.com:/sophon-tools-build-unified-v1.1.0.tar.zst
+docker load -i sophon-tools-build-unified-v1.1.0.tar.zst
+# 加载后镜像 tag: sophon-tools-build:unified-v1.1.0
+```
+
+### 本地构建（可选）
 
 完整镜像也可从仓库 Dockerfile 现场构建（需私有工具链归档，见下文"私有工具链"章节），
 构建时间约 30-60 分钟（Go/Node/Rust 下载 + apt + 工具链解压）：
 
 ```bash
 # 基础镜像（不含 dfss 私有工具链 sw_64/loongarch64、Qt mingw 静态库、pSophUI 交叉工具链）
-bash docker/build.sh
+bash docker/build.sh --no-dfss
 
 # 完整镜像（内置 dfss 私有工具链 + Qt mingw 静态库 + pSophUI 交叉工具链）
-bash docker/build.sh --with-dfss-toolchains --with-qt-mingw --with-sophui-toolchain
+bash docker/build.sh --no-dfss --with-dfss-toolchains --with-qt-mingw --with-sophui-toolchain
 
 # 只内置 dfss / 只内置 Qt mingw / 只内置 pSophUI / 指定标签 / 禁用缓存
 bash docker/build.sh --with-dfss-toolchains

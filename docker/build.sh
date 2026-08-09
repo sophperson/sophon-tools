@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
-# sophon-tools-build 镜像构建脚本（一条命令构建，M5 单镜像合并）
+# sophon-tools-build 镜像获取/构建脚本（一条命令，M5 单镜像合并）
+#
+# 默认行为（按优先级）:
+#   1. 本地已有 sophon-tools-build:<tag> 镜像 -> 直接使用
+#   2. 本地没有 -> 从 dfss 服务器拉取已构建镜像并 docker load
+#   3. dfss 拉取失败 -> 回退本地从源码构建
 #
 # 用法:
-#   bash docker/build.sh                 # 基础镜像(不含 dfss/qt-mingw/pSophUI 私有工具链)
-#   bash docker/build.sh --with-dfss-toolchains   # 内置 sw_64/loongarch64 私有工具链
-#   bash docker/build.sh --with-qt-mingw          # 内置 Qt mingw 静态库(pqt windows)
-#   bash docker/build.sh --with-sophui-toolchain  # 内置 pSophUI aarch64 Qt 交叉工具链
-#   bash docker/build.sh --from-dfss              # 从 dfss 服务器拉取已构建镜像(免本地构建)
+#   bash docker/build.sh                                  # 默认: 本地/dfss/本地构建 三级回退
+#   bash docker/build.sh --from-dfss                       # 强制从 dfss 拉取(跳过本地检查)
+#   bash docker/build.sh --no-dfss                         # 跳过 dfss 下载, 直接本地构建
+#   bash docker/build.sh --with-dfss-toolchains            # 本地构建时内置 sw_64/loongarch64 私有工具链
+#   bash docker/build.sh --with-qt-mingw                   # 本地构建时内置 Qt mingw 静态库(pqt windows)
+#   bash docker/build.sh --with-sophui-toolchain           # 本地构建时内置 pSophUI aarch64 Qt 交叉库
 #   bash docker/build.sh --tag mytag --no-cache
 #
 # 依赖: docker(≥20.10, BuildKit 默认开启), 网络可访问 go.dev/nodejs.org/musl.cc。
 #       pSophUI 工具链(及 dfss)以 toolchains/ 归档内置, 不依赖 cross_build_sophon_u20:v1 独立镜像。
-#       --from-dfss 模式依赖 python3-dfss 与 dfss 服务器镜像上传; 镜像路径经 DFSS_IMAGE_BASE 覆盖。
+#       dfss 下载依赖 python3-dfss 与 dfss 服务器镜像上传; 镜像路径经 DFSS_IMAGE_BASE 覆盖。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -25,6 +31,7 @@ WITH_DFSS=0
 WITH_QT_MINGW=0
 WITH_SOPHUI=0
 FROM_DFSS=0
+NO_DFSS=0
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -33,6 +40,7 @@ while [[ $# -gt 0 ]]; do
     --with-qt-mingw) WITH_QT_MINGW=1; shift ;;
     --with-sophui-toolchain) WITH_SOPHUI=1; shift ;;
     --from-dfss) FROM_DFSS=1; shift ;;
+    --no-dfss) NO_DFSS=1; shift ;;
     --tag) TAG="$2"; shift 2 ;;
     --no-cache) EXTRA_ARGS+=(--no-cache); shift ;;
     *) echo "未知参数: $1" >&2; exit 1 ;;
@@ -45,27 +53,50 @@ source "${DOCKER_DIR}/versions.env"
 
 [[ -n "${TAG}" ]] || TAG="${IMAGE_TAG:-unified}"
 
-# 从 dfss 服务器拉取已构建镜像（推荐，免本地构建）
-if [[ "${FROM_DFSS}" = "1" ]]; then
-  # dfss 文件名为 <image>-<tag>.tar.zst（冒号不适合文件路径，用 - 分隔）
-  DFSS_FILE="${IMAGE_NAME}-${TAG}.tar.zst"
-  DFSS_IMAGE_PATH="${DFSS_IMAGE_PATH:-${DFSS_IMAGE_BASE}${DFSS_FILE}}"
-  echo "==> 从 dfss 拉取已构建镜像 ${IMAGE_NAME}:${TAG} ..."
+FULL_IMAGE="${IMAGE_NAME}:${TAG}"
+
+# ---- 从 dfss 服务器拉取已构建镜像 ----
+# dfss 文件名为 <image>-<tag>.tar.zst（冒号不适合文件路径，用 - 分隔）
+DFSS_FILE="${IMAGE_NAME}-${TAG}.tar.zst"
+DFSS_IMAGE_PATH="${DFSS_IMAGE_PATH:-${DFSS_IMAGE_BASE:-open@sophgo.com:/}${DFSS_FILE}}"
+
+fetch_from_dfss() {
+  echo "==> 从 dfss 拉取已构建镜像 ${FULL_IMAGE} ..."
   echo "==> dfss 路径: ${DFSS_IMAGE_PATH}"
-  if docker image inspect "${IMAGE_NAME}:${TAG}" >/dev/null 2>&1; then
-    echo "==> 本地已存在 ${IMAGE_NAME}:${TAG}，跳过拉取"
-  else
-    python3 -m dfss --url="${DFSS_IMAGE_PATH}" || {
-      echo "ERROR: dfss 拉取失败: ${DFSS_IMAGE_PATH}" >&2
-      echo "       请确认 dfss 服务器上已上传镜像，或改用本地构建: bash docker/build.sh" >&2
-      exit 1
-    }
-    if [[ -f "${DFSS_FILE}" ]]; then
-      docker load -i "${DFSS_FILE}" && rm -f "${DFSS_FILE}"
-    fi
+  python3 -m dfss --url="${DFSS_IMAGE_PATH}" || {
+    echo "WARN: dfss 拉取失败: ${DFSS_IMAGE_PATH}" >&2
+    return 1
+  }
+  if [[ -f "${DFSS_FILE}" ]]; then
+    docker load -i "${DFSS_FILE}" && rm -f "${DFSS_FILE}"
+    echo "==> 镜像就绪: ${FULL_IMAGE}"
+    return 0
   fi
-  echo "==> 镜像就绪: ${IMAGE_NAME}:${TAG}"
+  echo "WARN: dfss 下载成功但未找到文件 ${DFSS_FILE}（可能下载到其他目录）" >&2
+  return 1
+}
+
+# 强制从 dfss 拉取
+if [[ "${FROM_DFSS}" = "1" ]]; then
+  fetch_from_dfss || {
+    echo "ERROR: 无法从 dfss 获取镜像 ${FULL_IMAGE}" >&2
+    exit 1
+  }
   exit 0
+fi
+
+# 默认优先级: 本地已有 -> 直接使用
+if docker image inspect "${FULL_IMAGE}" >/dev/null 2>&1; then
+  echo "==> 本地已存在 ${FULL_IMAGE}，直接使用"
+  exit 0
+fi
+
+# 本地没有 -> 尝试从 dfss 拉取
+if [[ "${NO_DFSS}" != "1" ]]; then
+  if fetch_from_dfss; then
+    exit 0
+  fi
+  echo "==> dfss 拉取不可用，回退本地构建..." >&2
 fi
 
 # 校验基础镜像 digest 可拉取
@@ -86,9 +117,9 @@ if [[ "${WITH_DFSS}" = "1" ]]; then
   EXTRA_ARGS+=(--build-arg WITH_DFSS=1)
 fi
 
-# pSophUI 交叉工具链(aarch64 Qt 5.12.8 + Linaro GCC 6.3): 检查 toolchains/ 归档
+# pSophUI 交叉 Qt 库(aarch64 Qt 5.12.8): 检查 toolchains/ 归档
 # 来源优先 13.24 cross_build_sophon_u20:v1 镜像内容导出(参考 M2 处理 dfss 工具链的方式),
-# 以归档内置后, 构建期不再依赖独立镜像。
+# 以归档内置后, 构建期不再依赖独立镜像。编译用系统 apt aarch64-linux-gnu-gcc（Linaro 已移除）。
 SOPHUI_ARCHIVE="${TOOLCHAIN_DIR}/${SOPHUI_ARCHIVE:-sophui-cross-toolchains.tar.zst}"
 if [[ "${WITH_SOPHUI}" = "1" ]]; then
   if [[ ! -f "${SOPHUI_ARCHIVE}" ]]; then
