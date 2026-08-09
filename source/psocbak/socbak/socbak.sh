@@ -5,7 +5,7 @@
 # env SOC_BAK_FIXED_DATA_START!="" for socbak fixed data partition start mode
 
 # 配置日志能力
-PWD="$(dirname "$(readlink -f "\$0")")"
+PWD="$(dirname "$(readlink -f "$0")")"
 TGZ_FILES_PATH=${PWD}
 LOGFILE="$(readlink -f "${BASH_SOURCE[0]}").log"
 rm -f $LOGFILE*
@@ -88,7 +88,7 @@ if [[ "${SOC_BAK_FIXED_DATA_START}" != "" ]]; then
 	echo "INFO: SOC_BAK_FIXED_DATA_START open, some ROOTFS_RW space will be automatically allocated to ROOTFS_RO"
 fi
 
-chmod +x ${TGZ_FILES_PATH}/binTools
+chmod -R +x ${TGZ_FILES_PATH}/binTools
 export PATH="${TGZ_FILES_PATH}/binTools":$PATH
 # find ./ -type f | grep -vE "md5.txt|\.log|output|sparse|\.bin|\.tgz|socbak.sh" | xargs md5sum > socbak_md5.txt
 pushd "${TGZ_FILES_PATH}"
@@ -107,8 +107,8 @@ if [[ "$SOC_BAK_ALL_IN_ONE" != "" ]]; then
 	echo "INFO: open all in one mode for ${ALL_IN_ONE_FLAG}"
 fi
 
-rm /home/*/.bash_history
-rm /root/.bash_history
+rm -f /home/*/.bash_history 2>/dev/null
+rm -f /root/.bash_history 2>/dev/null
 
 if type pigz >/dev/null 2>&1 ; then
 	PIGZ_GZIP_COM="pigz"
