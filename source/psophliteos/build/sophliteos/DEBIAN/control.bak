@@ -4,6 +4,7 @@ Version: @VERSION@
 Maintainer: Sophgo <support@sophgo.com>
 Priority: optional
 Section: admin
+Architecture: @ARCH@
 Description: sophliteos - Sophon Device Web Console
  Sophon 设备运维 Web 控制台（vben-admin 重构）。
  提供设备概览、运维、OTA、网络、告警/审计日志等前端页面，反代 /api/v1/* 到 bmssm。

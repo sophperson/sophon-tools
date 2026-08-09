@@ -1,4 +1,6 @@
 #!/bin/bash
+# 废弃：旧 tgz 打包流程（产出 sophliteos-linux_*.tgz），已被统一构建接口替换。
+# 请使用 `build/build-deb-sophliteos.sh <VERSION> <soc|pcie>` 直接出 deb。保留仅供回溯。
 set -e
 
 cp scrip/sophliteos.service scrip/install.sh  scrip/uninstall.sh scrip/upgrade.sh .
