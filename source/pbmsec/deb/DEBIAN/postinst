@@ -1,22 +1,48 @@
 #!/bin/bash
+# 配置 tftpd-hpa、安装 /bin/bmsec 链接、升级时恢复用户配置。
+# tftpd-hpa 的改动均有存在性守卫（依赖由 control Depends 声明，但服务可能被禁用/缺失）。
+set -e
 
 file="/etc/default/tftpd-hpa"
 
-if [[ $(grep -o '\-v' "$file") ]]; then
-    echo "TFTP_OPTIONS already contains '-v'. No changes made."
+if [ -f "$file" ]; then
+    if [[ $(grep -o '\-v' "$file") ]]; then
+        echo "TFTP_OPTIONS already contains '-v'. No changes made."
+    else
+        sed -i 's/\(TFTP_OPTIONS="\)/\1-v /' "$file"
+        echo "Added '-v' to TFTP_OPTIONS."
+    fi
 else
-    sed -i 's/\(TFTP_OPTIONS="\)/\1-v /' "$file"
-    echo "Added '-v' to TFTP_OPTIONS."
+    echo "WARN: $file not found, skip TFTP_OPTIONS modification"
 fi
 
-systemctl restart tftpd-hpa
+if systemctl list-unit-files tftpd-hpa.service >/dev/null 2>&1; then
+    systemctl restart tftpd-hpa
+else
+    echo "WARN: tftpd-hpa.service not found, skip restart"
+fi
+
 rm -rf /bin/bmsec
-ln -s /opt/sophon/bmsec/bmsec /bin/
+ln -sf /opt/sophon/bmsec/bmsec /bin/bmsec
 
 rm -rf /opt/sophon/bmsec/configs/subNANInfo
 
-if command -v mandb &> /dev/null
-then
+# 升级时恢复 preinst 备份的用户配置（覆盖新包默认值，保留用户修改）
+BKUP="/opt/sophon/bmsec-config-backup"
+if [ -n "${2:-}" ] && [ -d "$BKUP/configs" ]; then
+    if [ -d /opt/sophon/bmsec/configs ]; then
+        cp -a "$BKUP/configs/." /opt/sophon/bmsec/configs/
+    else
+        cp -a "$BKUP/configs" /opt/sophon/bmsec/configs
+    fi
+    rm -rf "$BKUP"
+    echo "bmsec: restored user configs from backup"
+fi
+
+# 恢复的备份中不含 subNANInfo；但新包解包/备份合并可能引入，统一再清理一次
+rm -rf /opt/sophon/bmsec/configs/subNANInfo
+
+if command -v mandb >/dev/null 2>&1; then
     mandb
 fi
 

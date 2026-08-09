@@ -1,3 +1,16 @@
 #!/bin/bash
+# 升级时先备份用户配置（configs/，排除运行时产物 subNANInfo），postinst 恢复；
+# 全新安装/卸载无需备份。备份放 /opt/sophon/bmsec-config-backup（不在清理范围内）。
+set -e
 
+BKUP="/opt/sophon/bmsec-config-backup"
+if [ "$1" = "upgrade" ] && [ -d /opt/sophon/bmsec/configs ]; then
+    rm -rf "$BKUP"
+    mkdir -p "$BKUP"
+    rm -rf /opt/sophon/bmsec/configs/subNANInfo  # 运行时产物不备份
+    cp -a /opt/sophon/bmsec/configs "$BKUP/configs"
+    echo "bmsec: backed up user configs to $BKUP"
+fi
+
+# 清理旧安装（配置已备份，运行时产物一并清除）
 rm -rf /opt/sophon/bmsec
