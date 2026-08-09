@@ -25,7 +25,17 @@ QT_MODULE="qtbase-everywhere-src-${QT_VERSION}"
 QT_URL="https://mirrors.tuna.tsinghua.edu.cn/qt/archive/qt/5.15/${QT_VERSION}/submodules/${QT_MODULE}.tar.xz"
 PREFIX="${PREFIX:-/opt/qt-mingw}"
 JOBS="${JOBS:-$(nproc)}"
-IMAGE="${IMAGE:-sophon-tools-build:unified}"
+# 默认镜像: 优先带版本号 tag（docker/versions.env 的 IMAGE_TAG），未定义则回退 unified
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+if [[ -z "${IMAGE:-}" ]]; then
+  if [[ -f "${SCRIPT_DIR}/../versions.env" ]]; then
+    # shellcheck disable=SC1091
+    source "${SCRIPT_DIR}/../versions.env"
+    IMAGE="sophon-tools-build:${IMAGE_TAG:-unified}"
+  else
+    IMAGE="sophon-tools-build:unified"
+  fi
+fi
 
 echo "==> 下载 Qt ${QT_VERSION} qtbase 源码..."
 if [[ ! -f "${REPO_ROOT}/docker/toolchains/${QT_MODULE}.tar.xz" ]]; then

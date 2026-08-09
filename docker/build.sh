@@ -6,10 +6,12 @@
 #   bash docker/build.sh --with-dfss-toolchains   # 内置 sw_64/loongarch64 私有工具链
 #   bash docker/build.sh --with-qt-mingw          # 内置 Qt mingw 静态库(pqt windows)
 #   bash docker/build.sh --with-sophui-toolchain  # 内置 pSophUI aarch64 Qt 交叉工具链
+#   bash docker/build.sh --from-dfss              # 从 dfss 服务器拉取已构建镜像(免本地构建)
 #   bash docker/build.sh --tag mytag --no-cache
 #
 # 依赖: docker(≥20.10, BuildKit 默认开启), 网络可访问 go.dev/nodejs.org/musl.cc。
 #       pSophUI 工具链(及 dfss)以 toolchains/ 归档内置, 不依赖 cross_build_sophon_u20:v1 独立镜像。
+#       --from-dfss 模式依赖 python3-dfss 与 dfss 服务器镜像上传; 镜像路径经 DFSS_IMAGE_BASE 覆盖。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -22,6 +24,7 @@ TAG=""
 WITH_DFSS=0
 WITH_QT_MINGW=0
 WITH_SOPHUI=0
+FROM_DFSS=0
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -29,17 +32,41 @@ while [[ $# -gt 0 ]]; do
     --with-dfss-toolchains) WITH_DFSS=1; shift ;;
     --with-qt-mingw) WITH_QT_MINGW=1; shift ;;
     --with-sophui-toolchain) WITH_SOPHUI=1; shift ;;
+    --from-dfss) FROM_DFSS=1; shift ;;
     --tag) TAG="$2"; shift 2 ;;
     --no-cache) EXTRA_ARGS+=(--no-cache); shift ;;
     *) echo "未知参数: $1" >&2; exit 1 ;;
   esac
 done
 
-[[ -n "${TAG}" ]] || TAG="unified"
-
 # 版本源: docker/versions.env(唯一版本锁定点)
 # shellcheck disable=SC1091
 source "${DOCKER_DIR}/versions.env"
+
+[[ -n "${TAG}" ]] || TAG="${IMAGE_TAG:-unified}"
+
+# 从 dfss 服务器拉取已构建镜像（推荐，免本地构建）
+if [[ "${FROM_DFSS}" = "1" ]]; then
+  # dfss 文件名为 <image>-<tag>.tar.zst（冒号不适合文件路径，用 - 分隔）
+  DFSS_FILE="${IMAGE_NAME}-${TAG}.tar.zst"
+  DFSS_IMAGE_PATH="${DFSS_IMAGE_PATH:-${DFSS_IMAGE_BASE}${DFSS_FILE}}"
+  echo "==> 从 dfss 拉取已构建镜像 ${IMAGE_NAME}:${TAG} ..."
+  echo "==> dfss 路径: ${DFSS_IMAGE_PATH}"
+  if docker image inspect "${IMAGE_NAME}:${TAG}" >/dev/null 2>&1; then
+    echo "==> 本地已存在 ${IMAGE_NAME}:${TAG}，跳过拉取"
+  else
+    python3 -m dfss --url="${DFSS_IMAGE_PATH}" || {
+      echo "ERROR: dfss 拉取失败: ${DFSS_IMAGE_PATH}" >&2
+      echo "       请确认 dfss 服务器上已上传镜像，或改用本地构建: bash docker/build.sh" >&2
+      exit 1
+    }
+    if [[ -f "${DFSS_FILE}" ]]; then
+      docker load -i "${DFSS_FILE}" && rm -f "${DFSS_FILE}"
+    fi
+  fi
+  echo "==> 镜像就绪: ${IMAGE_NAME}:${TAG}"
+  exit 0
+fi
 
 # 校验基础镜像 digest 可拉取
 BASE_IMG="${UBUNTU_BASE_DIGEST}"

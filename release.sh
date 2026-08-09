@@ -26,7 +26,16 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 cd "${SCRIPT_DIR}" || exit 1
 
-IMAGE="${IMAGE:-sophon-tools-build:unified}"
+# 默认镜像: 优先带版本号 tag（docker/versions.env 的 IMAGE_TAG），未定义则回退 unified
+if [[ -z "${IMAGE:-}" ]]; then
+  if [[ -f "${SCRIPT_DIR}/docker/versions.env" ]]; then
+    # shellcheck disable=SC1091
+    source "${SCRIPT_DIR}/docker/versions.env"
+    IMAGE="sophon-tools-build:${IMAGE_TAG:-unified}"
+  else
+    IMAGE="sophon-tools-build:unified"
+  fi
+fi
 ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -54,8 +63,12 @@ if [[ -z "${NO_IMAGE_CHECK:-}" ]]; then
   fi
   if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
     echo "ERROR: 统一构建镜像 ${IMAGE} 不存在。" >&2
-    echo "       请先构建镜像: bash docker/build.sh [--with-dfss-toolchains]" >&2
-    echo "       或指定已有镜像: bash release.sh --image <镜像名>" >&2
+    echo "       获取方式（按优先级）:" >&2
+    echo "         1) 从 dfss 服务器拉取已构建镜像（推荐，免本地构建）:" >&2
+    echo "            python3 -m dfss --url=open@sophgo.com:/<dfss路径>/${IMAGE#*:}.tar.zst" >&2
+    echo "            docker load -i ${IMAGE#*:}.tar.zst" >&2
+    echo "         2) 本地构建: bash docker/build.sh [--with-dfss-toolchains]" >&2
+    echo "         3) 指定已有镜像: bash release.sh --image <镜像名>" >&2
     exit 1
   fi
   echo "==> 镜像就绪: ${IMAGE}"

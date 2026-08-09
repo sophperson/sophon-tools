@@ -23,7 +23,16 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 DOCKER_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-PQT_IMAGE="${PQT_IMAGE:-sophon-tools-build-pqt:latest}"
+# 默认镜像: 优先带版本号 tag（docker/versions.env 的 IMAGE_TAG），未定义则回退 unified
+if [[ -z "${PQT_IMAGE:-}" ]]; then
+  if [[ -f "${DOCKER_DIR}/versions.env" ]]; then
+    # shellcheck disable=SC1091
+    source "${DOCKER_DIR}/versions.env"
+    PQT_IMAGE="sophon-tools-build:${IMAGE_TAG:-unified}"
+  else
+    PQT_IMAGE="sophon-tools-build:unified"
+  fi
+fi
 PROJECT="pqt_memory_edit"
 MODE=""  # linux / windows / all
 INPLACE="${PQT_INPLACE:-0}"
@@ -104,8 +113,12 @@ build_linux() {
   echo "==> 构建 ${PROJECT} linux AppImage (镜像 ${PQT_IMAGE})..."
   # 确保镜像存在
   docker image inspect "${PQT_IMAGE}" >/dev/null 2>&1 || {
-    echo "==> 构建 pqt 基础镜像..." >&2
-    docker build -f "${DOCKER_DIR}/pqt/Dockerfile" -t "${PQT_IMAGE}" "${DOCKER_DIR}/pqt" >&2
+    echo "ERROR: 统一构建镜像 ${PQT_IMAGE} 不存在。" >&2
+    echo "       获取方式:" >&2
+    echo "         1) 从 dfss 拉取: bash docker/build.sh --from-dfss" >&2
+    echo "         2) 本地构建:     bash docker/build.sh --with-dfss-toolchains --with-qt-mingw --with-sophui-toolchain" >&2
+    echo "       或改用 inplace 模式在统一镜像内直接执行: PQT_INPLACE=1 bash $0 --project ${PROJECT} --linux" >&2
+    return 1
   }
   docker run --rm --privileged \
     -v /dev:/dev \

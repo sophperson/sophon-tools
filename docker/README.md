@@ -12,7 +12,34 @@
 约 **10GB**（`docker images` 显示 ~10.1GB，实际层内容 ~9.4GB）。体积增大是单镜像方案的预期取舍
 ——换取构建期零镜像切换、一键全量。
 
-## 一条命令构建镜像
+**镜像版本**：镜像 tag 由 `docker/versions.env` 的 `IMAGE_TAG` 控制（默认 `unified-v1.0.0`），
+`release.sh` / `build-all.sh` 默认使用 `sophon-tools-build:${IMAGE_TAG}`。发布到 dfss 服务器后，
+通过 `docker load` 加载的镜像即为该 tag。
+
+## 获取镜像（两种方式）
+
+### 方式 1：从 dfss 服务器拉取已构建镜像（推荐，免本地构建）
+
+完整镜像（内置全部私有工具链）已导出并上传至 dfss 服务器，陌生开发者无需本地构建：
+
+```bash
+# 一条命令拉取 + 加载（dfss 路径见下方说明）
+bash docker/build.sh --from-dfss
+
+# 或手动:
+python3 -m dfss --url=open@sophgo.com:/<dfss路径>/sophon-tools-build-unified-v1.0.0.tar.zst
+docker load -i sophon-tools-build-unified-v1.0.0.tar.zst
+# 加载后镜像 tag: sophon-tools-build:unified-v1.0.0
+```
+
+> dfss 文件名约定 `<镜像名>-<tag>.tar.zst`（冒号不适合文件路径，用 `-` 分隔）。
+> dfss 路径前缀可用环境变量 `DFSS_IMAGE_BASE` 覆盖（默认 `open@sophgo.com:/`）：
+> `DFSS_IMAGE_BASE=open@sophgo.com:/some/path bash docker/build.sh --from-dfss`
+
+### 方式 2：本地构建
+
+完整镜像也可从仓库 Dockerfile 现场构建（需私有工具链归档，见下文"私有工具链"章节），
+构建时间约 30-60 分钟（Go/Node/Rust 下载 + apt + 工具链解压）：
 
 ```bash
 # 基础镜像（不含 dfss 私有工具链 sw_64/loongarch64、Qt mingw 静态库、pSophUI 交叉工具链）
@@ -36,11 +63,12 @@ bash docker/build.sh --tag v1.0 --no-cache
 
 ### 版本锁定（可复现）
 
-- 唯一版本源：`docker/versions.env` —— 全部工具链版本 + 校验和统一在此维护。
+- 唯一版本源：`docker/versions.env` —— 全部工具链版本 + 校验和统一在此维护，含镜像版本号 `IMAGE_TAG`。
 - 基础镜像 `ubuntu:20.04` 用 **digest**（不可变引用）锁定，不用 tag。
 - Go / Node 下载后做 **SHA256 校验**（校验失败即中止构建）。
 - Rust 用 rustup 锁定稳定版 `1.97.1`；musl 工具链来自 musl.cc。
 - 想固定 musl 工具链内容：把首次构建打印的实际 SHA256 填入 `versions.env` 的 `MUSL_*_SHA256`。
+- 发布新镜像版本：改 `versions.env` 的 `IMAGE_TAG`，重建并导出（`docker save`）后上传 dfss。
 
 ## 为什么基座是 ubuntu:20.04（硬约束）
 

@@ -10,7 +10,16 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-IMAGE="${IMAGE:-sophon-tools-build:unified}"
+# 默认镜像: 优先带版本号 tag（docker/versions.env 的 IMAGE_TAG），未定义则回退 unified
+if [[ -z "${IMAGE:-}" ]]; then
+  if [[ -f "${SCRIPT_DIR}/versions.env" ]]; then
+    # shellcheck disable=SC1091
+    source "${SCRIPT_DIR}/versions.env"
+    IMAGE="sophon-tools-build:${IMAGE_TAG:-unified}"
+  else
+    IMAGE="sophon-tools-build:unified"
+  fi
+fi
 DO_CROSS=0
 
 while [[ $# -gt 0 ]]; do

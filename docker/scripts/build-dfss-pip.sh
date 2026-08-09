@@ -14,7 +14,16 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 DOCKER_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-IMAGE="${IMAGE:-sophon-tools-build:unified}"
+# 默认镜像: 优先带版本号 tag（docker/versions.env 的 IMAGE_TAG），未定义则回退 unified
+if [[ -z "${IMAGE:-}" ]]; then
+  if [[ -f "${DOCKER_DIR}/versions.env" ]]; then
+    # shellcheck disable=SC1091
+    source "${DOCKER_DIR}/versions.env"
+    IMAGE="sophon-tools-build:${IMAGE_TAG:-unified}"
+  else
+    IMAGE="sophon-tools-build:unified"
+  fi
+fi
 PDFSS_SRC="${REPO_ROOT}/source/pdfss_cpp"
 SKIP_LIBS=0
 ARCHES=()
