@@ -4,4 +4,5 @@ Version: BMSEC_VERSION
 Architecture: all
 Maintainer: sophon
 Priority: optional
+Depends: tftpd-hpa
 Description: This is a tool for se6/8.

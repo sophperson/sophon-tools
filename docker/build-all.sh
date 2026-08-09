@@ -115,6 +115,12 @@ EXTRA_ENV[pdfss_cpp]="export PATH=/env/loongson-gnu-toolchain-8.3-x86_64-loongar
 EXTRA_ENV[pqt_batch_deployment]="export PQT_INPLACE=1"
 EXTRA_ENV[pqt_memory_edit]="export PQT_INPLACE=1"
 
+# 子项目 -> 构建依赖（先构建依赖方，再构建本项目）
+# pbmsec 的 socbak.zip 取自 psocbak（release.sh 会优先复用其产物，缺失时现场打包），
+# 因此 psocbak 必须先于 pbmsec 构建，否则干净 checkout 上 pbmsec 会失败。
+declare -A DEPENDS
+DEPENDS[pbmsec]=psocbak
+
 if [[ "${LIST_ONLY:-0}" = "1" ]]; then
   echo "=== sophon-tools 16 子项目构建清单（pmulti_video_qt 已排除，单镜像 ${IMAGE}） ==="
   for p in $(echo "${!DEFAULT_ARCH[@]}" | tr ' ' '\n' | sort); do
@@ -167,10 +173,27 @@ run_one() {
   fi
 }
 
+# 构建顺序: 有依赖的项目等其依赖方先构建完；无依赖按字母序。
+# 去重 + 拓扑排序（本项目仅一层依赖，简单处理即可）。
+build_order() {
+  local order=() seen=" "
+  local p d
+  for p in $(echo "${!DEFAULT_ARCH[@]}" | tr ' ' '\n' | sort); do
+    d="${DEPENDS[$p]:-}"
+    if [[ -n "$d" && "$seen" != *" $d "* ]]; then
+      order+=("$d"); seen="$seen$d "
+    fi
+    if [[ "$seen" != *" $p "* ]]; then
+      order+=("$p"); seen="$seen$p "
+    fi
+  done
+  printf '%s\n' "${order[@]}"
+}
+
 if [[ -n "${ONLY_PROJECT}" ]]; then
   run_one "${ONLY_PROJECT}"
 else
-  for p in $(echo "${!DEFAULT_ARCH[@]}" | tr ' ' '\n' | sort); do
+  for p in $(build_order); do
     run_one "$p"
   done
 fi
@@ -199,6 +222,22 @@ if [[ -z "${ONLY_PROJECT}" || "${ONLY_PROJECT}" = "pSophUI" ]]; then
              "${pui}"/ui_mainwindow.h 2>/dev/null || true
       rm -f "${pui}/SophUI" 2>/dev/null || true
       rm -rf "${pui}/deb/opt" 2>/dev/null || true
+    fi
+  fi
+fi
+
+# ---- 构建后清理：pbmsec 的 pandoc/socbak 会把 HTML/man/zip 生成到源码树 deb/ 下 ----
+# 这些是中间产物（*.html / *.1 / *.zip 被 gitignore，但目录由容器内 root 创建，
+# 宿主后续构建会因权限失败）。统一构建后移除，保持工作区可被宿主持续使用。
+if [[ -z "${ONLY_PROJECT}" || "${ONLY_PROJECT}" = "pbmsec" ]]; then
+  pbmsec_gen="${REPO_ROOT}/source/pbmsec/deb/opt/sophon/bmsec/doc"
+  pbmsec_share="${REPO_ROOT}/source/pbmsec/deb/usr/share"
+  pbmsec_socbak="${REPO_ROOT}/source/pbmsec/deb/opt/sophon/bmsec/binTools/socbak.zip"
+  if [[ -d "${pbmsec_gen}" || -d "${pbmsec_share}" || -f "${pbmsec_socbak}" ]]; then
+    if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+      sudo rm -rf "${pbmsec_gen}" "${pbmsec_share}" "${pbmsec_socbak}" 2>/dev/null || true
+    else
+      rm -rf "${pbmsec_gen}" "${pbmsec_share}" "${pbmsec_socbak}" 2>/dev/null || true
     fi
   fi
 fi
