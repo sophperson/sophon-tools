@@ -173,6 +173,8 @@ docker build \
   --build-arg MUSL_AARCH64_SHA256="${MUSL_AARCH64_SHA256}" \
   --build-arg MUSL_X86_64_URL="${MUSL_X86_64_URL}" \
   --build-arg MUSL_X86_64_SHA256="${MUSL_X86_64_SHA256}" \
+  --build-arg UPX_TARBALL_URL="${UPX_TARBALL_URL}" \
+  --build-arg UPX_TARBALL_SHA256="${UPX_TARBALL_SHA256}" \
   "${EXTRA_ARGS[@]}" \
   -f "${DOCKER_DIR}/Dockerfile" \
   -t "${IMAGE_NAME}:${TAG}" \
