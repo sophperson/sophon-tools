@@ -19,6 +19,11 @@ source
 * `memory_edit.sh` 文件是主要程序内容
 * `bintools` 文件中是编辑itb文件所需要的部分二进制程序
 
+> `bintools` 下五个二进制（cpio/dtc/dumpimage/file/mkimage）均为 **aarch64 预编译**：
+> `dtc`/`dumpimage`/`mkimage` 为静态链接，`cpio`/`file` 为动态链接（依赖
+> `/lib/ld-linux-aarch64.so.1`），来源于 Sophon 设备侧 SDK 交叉编译产物。
+> 本包仅支持 arm64 平台，`release.sh` 不接受其他 ARCH。
+
 ## 使用说明
 
 ``` bash
