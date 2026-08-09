@@ -32,6 +32,7 @@ ARG RUST_VERSION
 ARG NODE_TARBALL_URL NODE_TARBALL_SHA256
 ARG PNPM_VERSION YARN_VERSION
 ARG MUSL_AARCH64_URL MUSL_AARCH64_SHA256 MUSL_X86_64_URL MUSL_X86_64_SHA256
+ARG UPX_TARBALL_URL UPX_TARBALL_SHA256
 ARG WITH_DFSS=0
 ARG WITH_QT_MINGW=0
 ARG WITH_SOPHUI=0
@@ -86,10 +87,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 python3-pip python3-dev \
         brotli zstd xz-utils bzip2 \
         libssl-dev libtool autoconf automake \
-        file binutils upx-ucl \
+        file binutils \
         qemu-user qemu-user-static binfmt-support \
         libfuse2 fuse ssh strace pandoc sudo \
     && rm -rf /var/lib/apt/lists/*
+
+# ---- upx(固定 4.x, 静态链接; 替代 ubuntu 仓库 upx-ucl 3.95) ----
+# upx 3.x 不支持压缩 static-pie(Rust musl 静态产物), 统一镜像内压缩会静默失败(MYS-58 O-2)。
+# 固定 4.2.4 静态二进制, 下载即校验 SHA256(versions.env 锁定)。
+ARG UPX_TARBALL_URL UPX_TARBALL_SHA256
+RUN curl -fsSL "${UPX_TARBALL_URL}" -o /tmp/upx.tar.xz \
+    && echo "${UPX_TARBALL_SHA256}  /tmp/upx.tar.xz" | sha256sum -c - \
+    && tar -C /usr/local/bin -xJf /tmp/upx.tar.xz --strip-components=1 --wildcards '*/upx' \
+    && rm /tmp/upx.tar.xz \
+    && upx --version | head -1
 
 # ---- Go(来自 Stage1, 已校验) ----
 COPY --from=downloader /opt/go /opt/go
