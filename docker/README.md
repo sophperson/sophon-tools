@@ -96,7 +96,7 @@ ubuntu:20.04 的 glibc 是 2.31（22.04 是 2.35）。M5 决定以 20.04 为唯�
 | pdfss_cpp (私有) | sw_64 + loongarch64 | SWREACH GCC 8.3.0 / LoongArch 8.3.0（dfss 私有源） |
 | pqt 系列 (linux AppImage) | Qt 5 + qmake | qtbase5-dev = Qt 5.12.8（20.04 仓库）+ libgl1-mesa-dev + fuse + patchelf |
 | pqt 系列 (windows exe) | Qt 5.15.2 mingw 静态 | `/opt/qt-mingw`（build-qt-mingw.sh 编译，`--with-qt-mingw` 内置） |
-| pSophUI | aarch64 Qt 5.12.8 + Linaro GCC 6.3 | `/env/qt_5.12.8_nosysroot` + `/env/gcc-linaro-6.3.1-2017.05-x86_64_aarch64-linux-gnu`（13.24 同款） |
+| pSophUI | aarch64 Qt 5.12.8 交叉库 + apt aarch64-linux-gnu-gcc 9.4 | `/env/qt_5.12.8_nosysroot`（13.24 同款 Qt）+ 系统工具链（Linaro GCC 6.3 已移除） |
 | 打包/文档 | dpkg-deb / 7z / zip / upx / patchelf / pandoc | apt 精确版本 |
 | 跨架构验证 | qemu-user-static | aarch64 / loongarch64 等 |
 
@@ -148,9 +148,12 @@ bash docker/build.sh --with-qt-mingw
 > 其宿主工具（uic/moc/rcc 等）链接 glibc ≥ 2.33，在 20.04 基座（glibc 2.31）内无法运行。
 > `build.sh --with-qt-mingw` 会先校验/触发从源码重建，保证宿主工具与 20.04 兼容。
 
-## pSophUI 交叉工具链（aarch64 Qt 5.12.8 + Linaro GCC 6.3）
+## pSophUI 交叉 Qt 库（aarch64 Qt 5.12.8）
 
-与 13.24 `cross_build_sophon_u20:v1` 完全一致，**默认不内置**（约 1GB，私有源）。两种获取方式：
+与 13.24 `cross_build_sophon_u20:v1` 的 Qt 库一致，**默认不内置**（约 42MB 归档 / 180MB 解压，私有源）。
+**只含 aarch64 Qt 库，不含交叉编译器**——pSophUI 编译用系统 apt 的 `aarch64-linux-gnu-gcc 9.4`
+（`source/pSophUI/release.sh` 默认 `CROSS_PREFIX=/usr`），替代原 Linaro GCC 6.3（已移除，省约 700MB）。
+两种获取方式：
 
 ### 方式 1：从 13.24 服务器镜像导出（推荐）
 
@@ -158,7 +161,7 @@ bash docker/build.sh --with-qt-mingw
 
 ```bash
 bash docker/scripts/export-sophui-toolchains.sh
-# 产物: docker/toolchains/sophui-cross-toolchains.tar.zst (约 253MB)
+# 产物: docker/toolchains/sophui-cross-toolchains.tar.zst (约 42MB, 已剔除 examples/qml 冗余)
 ```
 
 然后构建：
@@ -168,7 +171,7 @@ bash docker/build.sh --with-sophui-toolchain
 ```
 
 归档内置后，构建期不再依赖 `cross_build_sophon_u20:v1` 独立镜像（与 M2 处理 dfss 工具链的方式一致）。
-qmake / mkspecs / Linaro gcc 硬编码 `/env` 绝对路径，解压到 `/env` 原始路径，绝对引用全部有效。
+qmake / mkspecs 硬编码 `/env` 绝对路径，解压到 `/env` 原始路径，绝对引用全部有效。
 
 ## 挂载源码跑构建
 
@@ -295,7 +298,8 @@ bash docker/examples/cross-test/run.sh --image sophon-tools-build:unified
 1. **pqt 系列 AppImage** 在统一镜像（20.04，glibc 2.31）内构建，产物兼容 glibc ≥ 2.27 的系统。
 2. **pqt 系列 windows exe** 依赖 Qt 5.15 mingw 静态库（`build-qt-mingw.sh` 交叉编译，20-40 分钟）；
    `--with-qt-mingw` 后内置 `/opt/qt-mingw`，全部在统一镜像内完成，无需宿主 `/opt/qt-mingw`。
-3. **pSophUI** 在统一镜像内交叉编译（aarch64 Qt 5.12.8 + Linaro GCC 6.3，`--with-sophui-toolchain` 内置，
+3. **pSophUI** 在统一镜像内交叉编译（aarch64 Qt 5.12.8 库 `--with-sophui-toolchain` 内置，
+   编译器用系统 apt `aarch64-linux-gnu-gcc 9.4`，Linaro GCC 6.3 已移除；
    `sophui-cross-toolchains.tar.zst` 归档导出自 cross_build_sophon_u20:v1），
    产出 `sophgo-hdmi_<ver>_arm64.deb` + `SophUI_arm64`（尾部 upx 缺失仅告警，不影响产物）。
 4. **pmulti_video_qt** 已按 MYSWY 决定从统一构建范围排除（不需要做），不再参与构建。

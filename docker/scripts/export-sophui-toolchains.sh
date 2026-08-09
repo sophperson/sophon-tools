@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 从 13.24 服务器的 cross_build_sophon_u20:v1 镜像导出 pSophUI 交叉工具链
-# （aarch64 Qt 5.12.8 + Linaro GCC 6.3）。
+# 从 13.24 服务器的 cross_build_sophon_u20:v1 镜像导出 pSophUI 交叉 Qt 库
+# （aarch64 Qt 5.12.8；不含 Linaro GCC —— 编译改用系统 apt aarch64-linux-gnu-gcc）。
 #
 # 用法:
 #   bash docker/scripts/export-sophui-toolchains.sh [--image <name>] [--out <dir>]
@@ -28,9 +28,8 @@ done
 
 mkdir -p "${OUT_DIR}"
 
-# 容器内工具链路径（cross_build_sophon_u20:v1 同款，绝对引用硬编码 /env）
+# 容器内 Qt 库路径（cross_build_sophon_u20:v1 同款，绝对引用硬编码 /env）
 QT_SRC="/env/qt_5.12.8_nosysroot"
-GCC_SRC="/env/gcc-linaro-6.3.1-2017.05-x86_64_aarch64-linux-gnu"
 
 ARCHIVE="${OUT_DIR}/sophui-cross-toolchains.tar.zst"
 
@@ -45,14 +44,14 @@ if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! docker run --rm "${IMAGE}" sh -c "test -d '${QT_SRC}' && test -d '${GCC_SRC}'" >/dev/null 2>&1; then
-  echo "错误: 镜像 '${IMAGE}' 中未找到 ${QT_SRC} 或 ${GCC_SRC}。" >&2
+if ! docker run --rm "${IMAGE}" sh -c "test -d '${QT_SRC}'" >/dev/null 2>&1; then
+  echo "错误: 镜像 '${IMAGE}' 中未找到 ${QT_SRC}。" >&2
   exit 1
 fi
 
-echo "导出 ${QT_SRC} + ${GCC_SRC} -> ${ARCHIVE} ..."
-# 镜像内无 zstd, 直接流式导到宿主用 zstd 压缩
-docker run --rm "${IMAGE}" sh -c "tar -C /env -cf - qt_5.12.8_nosysroot gcc-linaro-6.3.1-2017.05-x86_64_aarch64-linux-gnu" \
+echo "导出 ${QT_SRC} -> ${ARCHIVE}（剔除 examples/qml 冗余）..."
+# 镜像内无 zstd, 直接流式导到宿主用 zstd 压缩; 剔除编译 pSophUI 不需要的 examples/qml
+docker run --rm "${IMAGE}" sh -c "rm -rf '${QT_SRC}/examples' '${QT_SRC}/qml'; tar -C /env -cf - qt_5.12.8_nosysroot" \
   | zstd -q -T0 -o "${ARCHIVE}"
 ls -lh "${ARCHIVE}"
 

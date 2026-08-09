@@ -23,7 +23,9 @@ VERSION="${2:-$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' "$SCRIPT_DIR/SophUI/deb/DEBIAN
 VERSION="${VERSION:-1.6.8}"
 
 QT_CROSS_PREFIX="${QT_CROSS_PREFIX:-/env/qt_5.12.8_nosysroot}"
-CROSS_PREFIX="${CROSS_PREFIX:-/env/gcc-linaro-6.3.1-2017.05-x86_64_aarch64-linux-gnu}"
+# 交叉编译器: 默认用系统 aarch64-linux-gnu-gcc（apt, GCC 9.4），替代原 Linaro GCC 6.3
+# （Linaro 依赖已从统一镜像移除，见 docker/Dockerfile 的 WITH_SOPHUI 精简）
+CROSS_PREFIX="${CROSS_PREFIX:-/usr}"
 
 QMAKE="$QT_CROSS_PREFIX/bin/qmake"
 CROSS_GCC="$CROSS_PREFIX/bin/aarch64-linux-gnu-gcc"
@@ -34,7 +36,13 @@ if [ "$ARCH" != "arm64" ]; then
 fi
 if [ ! -x "$QMAKE" ]; then
   echo "ERROR: 未找到 aarch64 Qt qmake: $QMAKE" >&2
-  echo "       需要交叉 Qt 环境（13.24 cross_build_sophon_u20: /env/qt_5.12.8_nosysroot）" >&2
+  echo "       需要交叉 Qt 环境（统一镜像内置 /env/qt_5.12.8_nosysroot）" >&2
+  exit 2
+fi
+if [ ! -x "$CROSS_GCC" ]; then
+  echo "ERROR: 未找到 aarch64 交叉编译器: $CROSS_GCC" >&2
+  echo "       默认使用系统工具链（apt aarch64-linux-gnu-gcc）" >&2
+  echo "       如用其它工具链: CROSS_PREFIX=<prefix> bash release.sh $ARCH" >&2
   exit 2
 fi
 

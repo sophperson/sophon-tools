@@ -9,7 +9,7 @@
 #        - 旧 sophon-tools-build-pqt     (ubuntu:20.04 pqt 专用) -> 本镜像(合并 pqt 依赖)
 #        - 旧 cross_build_sophon_u20:v1  (ubuntu:20.04 pSophUI)  -> 本镜像(并入 aarch64 Qt)
 #   * 多阶段构建: Stage1 下载并校验国外大体积工具链(Go/Node); Stage2 汇入运行镜像。
-#     pSophUI 交叉工具链(Stage3 独立镜像 cross_build_sophon_u20:v1)已并入本镜像,
+#     pSophUI 的 aarch64 Qt 库(Stage3 独立镜像 cross_build_sophon_u20:v1)已并入本镜像,
 #     通过 toolchains/sophui-cross-toolchains.tar.zst 归档内置, 不再依赖独立镜像。
 #   * 版本唯一来源 docker/versions.env(由 docker/build.sh 注入 ARG), 全部版本锁定。
 #   * 交叉工具链: apt 精确版本(glibc) + musl.cc(静态) + dfss 私有工具链(sw_64/loongarch64)。
@@ -17,8 +17,9 @@
 #     toolchains/ 目录内置。
 #   * Qt mingw 静态库(pqt windows exe 依赖)默认不内置; 通过 --with-qt-mingw 或构建上下文
 #     toolchains/qt-mingw/ 目录内置。
-#   * pSophUI 交叉工具链(aarch64 Qt 5.12.8 + Linaro GCC 6.3)默认不内置(约 1GB, 私有源);
+#   * pSophUI 交叉 Qt 库(aarch64 Qt 5.12.8)默认不内置(约 300MB, 私有源);
 #     通过 --with-sophui-toolchain 或构建上下文 toolchains/sophui-cross-toolchains.tar.zst 内置。
+#     pSophUI 编译用系统 apt aarch64-linux-gnu-gcc 9.4(Linaro GCC 6.3 已移除)。
 #
 # 构建(一条命令):  bash docker/build.sh
 # 构建(含私有工具链): bash docker/build.sh --with-dfss-toolchains --with-qt-mingw --with-sophui-toolchain
@@ -124,21 +125,24 @@ RUN mkdir -p /opt/musl \
     && tar -C /opt/musl -xzf /tmp/musl-x86_64.tgz && rm /tmp/musl-x86_64.tgz \
     && aarch64-linux-musl-gcc --version | head -1 && x86_64-linux-musl-gcc --version | head -1
 
-# ---- pSophUI 交叉工具链(aarch64 Qt 5.12.8 + Linaro GCC 6.3) ----
-# 与 13.24 cross_build_sophon_u20:v1 完全一致, 保持 /env 原始路径。
+# ---- pSophUI 交叉 Qt 库(aarch64 Qt 5.12.8) ----
+# 与 13.24 cross_build_sophon_u20:v1 一致, 保持 /env 原始路径。
 # 来源: toolchains/sophui-cross-toolchains.tar.zst(由 export-sophui-toolchains.sh 从
-#       13.24 cross_build_sophon_u20:v1 导出), 解压到 /env 原始路径, 保证 qmake/mkspecs/
-#       Linaro gcc 硬编码的绝对引用全部有效。
-# 注意: 不把 /env/qt_5.12.8_nosysroot/bin 加入全局 PATH——其含通用名 qmake/moc,
+#       13.24 cross_build_sophon_u20:v1 导出), 解压到 /env 原始路径。
+# 注意: 仅含 aarch64 Qt 库, 不含交叉编译器——pSophUI 编译用系统 apt 的
+#       aarch64-linux-gnu-gcc 9.4(source/pSophUI/release.sh 默认 CROSS_PREFIX=/usr),
+#       替代原 Linaro GCC 6.3(已移除, 省约 731MB)。
+# 不把 /env/qt_5.12.8_nosysroot/bin 加入全局 PATH——其含通用名 qmake/moc,
 #       会遮蔽宿主机 Qt5 qmake, 破坏 pqt 系列(linuxdeployqt)构建。
 #       pSophUI 的 release.sh 内部自行 export 自己的 qmake/gcc 到 PATH(见 source/pSophUI/release.sh)。
-# 默认不内置(约 1GB, 私有源); 加 --with-sophui-toolchain 或构建上下文放归档自动内置。
+# 默认不内置(约 300MB, 私有源); 加 --with-sophui-toolchain 或构建上下文放归档自动内置。
 ARG WITH_SOPHUI=0
 COPY toolchains/ /tmp/toolchains/
 RUN if [ "${WITH_SOPHUI}" = "1" ] && [ -f /tmp/toolchains/sophui-cross-toolchains.tar.zst ]; then \
         mkdir -p /env \
         && tar -C /env -I zstd -xf /tmp/toolchains/sophui-cross-toolchains.tar.zst \
-        && rm -f /tmp/toolchains/sophui-cross-toolchains.tar.zst; \
+        && rm -f /tmp/toolchains/sophui-cross-toolchains.tar.zst \
+        && rm -rf /env/qt_5.12.8_nosysroot/examples /env/qt_5.12.8_nosysroot/qml; \
     fi
 
 # ---- Qt mingw 静态库(pqt windows exe 依赖) ----
@@ -185,7 +189,7 @@ WORKDIR /workspace
 RUN git config --global --add safe.directory "*" \
     && printf '#!/bin/bash\nif [ -x /usr/sw/swgcc830_cross_tools/usr/bin/sw_64-sunway-linux-gnu-gcc ] && [ -x /env/loongson-gnu-toolchain-8.3-x86_64-loongarch64-linux-gnu-rc1.1/bin/loongarch64-linux-gnu-gcc ]; then\n  echo "[sophon-tools-build] dfss 私有工具链已就绪 (sw_64 + loongarch64)"\nelse\n  echo "[sophon-tools-build] dfss 私有工具链未内置 (构建时加 --with-dfss-toolchains)"\nfi\n' > /usr/local/bin/dfss-check \
     && chmod +x /usr/local/bin/dfss-check \
-    && printf '#!/bin/bash\nif [ -x /env/qt_5.12.8_nosysroot/bin/qmake ] && [ -x /env/gcc-linaro-6.3.1-2017.05-x86_64_aarch64-linux-gnu/bin/aarch64-linux-gnu-gcc ]; then\n  echo "[sophon-tools-build] pSophUI 交叉工具链已就绪 (aarch64 Qt 5.12.8 + Linaro GCC 6.3)"\nelse\n  echo "[sophon-tools-build] pSophUI 交叉工具链缺失"\nfi\n' > /usr/local/bin/sophui-check \
+    && printf '#!/bin/bash\nif [ -x /env/qt_5.12.8_nosysroot/bin/qmake ]; then\n  echo "[sophon-tools-build] pSophUI 交叉 Qt 库已就绪 (aarch64 Qt 5.12.8)"\nelse\n  echo "[sophon-tools-build] pSophUI 交叉 Qt 库缺失 (构建时加 --with-sophui-toolchain)"\nfi\n' > /usr/local/bin/sophui-check \
     && chmod +x /usr/local/bin/sophui-check
 
 CMD ["/bin/bash"]
