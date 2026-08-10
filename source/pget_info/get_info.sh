@@ -1,6 +1,6 @@
 #!/bin/bash
 
-GET_INFO_VERSION="1.2.0"
+GET_INFO_VERSION="1.3.0"
 
 shopt -s compat31
 
