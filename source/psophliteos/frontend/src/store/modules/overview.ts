@@ -23,7 +23,7 @@ enum deviceRunningSatus {
 export const useDeviceInfo = defineStore({
   id: 'app-device-info',
   state: () => ({
-    singleBoardArr: ['se5', 'se7', 'se9'],
+    singleBoardArr: ['se5', 'se7', 'se9', 'cv84x6', 'cv186ah', '84x6', 'cv84x2', '84x2'],
     deviceInfo: {
       deviceName: '',
       deviceSn: '',
@@ -188,12 +188,8 @@ export const useDeviceInfo = defineStore({
             );
             this.deviceInfo[key] = { total, used, unit: 'MB' };
           } else if (key === 'temperature') {
-            // SE5/SE7/SE9 取 chip[0].temperature，否则 board[0].temperature
-            if (
-              deviceType === 'SE5' ||
-              deviceType === 'SE7' ||
-              deviceType === 'SE9'
-            ) {
+            // 单板设备（SE5/SE7/SE9/CV84X2 等）取 chip[0].temperature，多板取 board[0].temperature
+            if (this.isSingleBoard) {
               this.deviceInfo[key] =
                 result?.coreComputingUnit?.board?.[0]?.chip?.[0]?.temperature ?? 0;
             } else {
