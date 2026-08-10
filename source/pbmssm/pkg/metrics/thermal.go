@@ -10,7 +10,8 @@ const (
 	chipTempPath  = "/sys/class/thermal/thermal_zone0/temp" // 芯片温度（milli-celsius）
 	boardTempPath = "/sys/class/thermal/thermal_zone1/temp" // 板温（milli-celsius）
 	npuUsagePath  = "/sys/class/bm-tpu/bm-tpu0/device/npu_usage"
-	tpuMemPath    = "/sys/kernel/debug/ion/bm_npu_heap_dump/total_mem" // 需 root
+	tpuMemPath    = "/sys/kernel/debug/ion/bm_npu_heap_dump/total_mem"  // 需 root（bm1684/bm1684x）
+	tpuMemPathV2  = "/sys/kernel/debug/ion/cvi_npu_heap_dump/total_mem" // 需 root（cv 家族：bm1688/cv186ah/cv84x6）
 )
 
 // ChipTemp 读取芯片温度（thermal_zone0），milli-celsius → 整数 ℃。
@@ -95,11 +96,16 @@ func (c *Collector) TpuMemUsage() int {
 	return int(float64(used)*100.0/float64(total) + 0.5)
 }
 
-// 源：/sys/kernel/debug/ion/bm_npu_heap_dump/total_mem（字节，需 root）。
+// 源：/sys/kernel/debug/ion/bm_npu_heap_dump/total_mem 或 cvi_npu_heap_dump/total_mem（字节，需 root）。
 // 对齐 pget_info：TPU_MEM(MiB) = total_mem/1024/1024。
+// cv 家族（bm1688/cv186ah/cv84x6）走 cvi_ 前缀路径；bm1684/bm1684x 走 bm_ 前缀。
 // 非 root 读不到 debugfs，降级返 0。
 func (c *Collector) TPUMem() float64 {
-	s := c.readStr(tpuMemPath)
+	path := tpuMemPath
+	if chipFamily(c.ChipType()) == "cv" {
+		path = tpuMemPathV2
+	}
+	s := c.readStr(path)
 	if s == "" {
 		return 0
 	}

@@ -15,7 +15,7 @@ const (
 )
 
 // ChipType 读取 /proc/cpuinfo 的 model name，返回小写芯片型号。
-// "bm1684x", "bm1684", "bm1688", "cv186ah"，失败返空串。
+// "bm1684x", "bm1684", "bm1688", "cv186ah", "cv84x6"，失败返空串。
 func (c *Collector) ChipType() string {
 	content := c.readStr(cpuInfoPath)
 	if content == "" {
@@ -31,27 +31,42 @@ func (c *Collector) ChipType() string {
 		return "bm1684"
 	case strings.Contains(s, "cv186ah"):
 		return "cv186ah"
+	case strings.Contains(s, "cv84x6"):
+		return "cv84x6"
 	default:
 		return ""
 	}
 }
 
+// chipFamily 归一化芯片家族：bm1684（含 bm1684x）/ cv（bm1688、cv186ah、cv84x6）。
+// 用于选择"是否走 bm1688 路径"（SN、ion heap、vpuinfo、SDK 版本等）。
+// 时钟路径不能按家族共享（CV84X2 时钟名与 bm1688 不同），需按芯片特判。
+func chipFamily(chip string) string {
+	switch chip {
+	case "bm1684", "bm1684x":
+		return "bm1684"
+	case "bm1688", "cv186ah", "cv84x6":
+		return "cv"
+	}
+	return ""
+}
+
 // VppMemory 读取 VPP 堆内存（bytes）。对齐 Rust parse_memory_from_command：
 //
 //	BM1684/BM1684X → ionVppHeapV1 [1]行
-//	BM1688/CV186AH → ionVppHeapV2 [1]行
+//	BM1688/CV186AH/CV84X2 → ionVppHeapV2 [1]行
 //	不支持芯片 → 0,0
 func (c *Collector) VppMemory(chip string) (total, used int64) {
 	switch chip {
 	case "bm1684x", "bm1684":
 		return c.parseIonHeapLine(ionVppHeapV1, "[1]")
-	case "bm1688", "cv186ah":
+	case "bm1688", "cv186ah", "cv84x6":
 		return c.parseIonHeapLine(ionVppHeapV2, "[1]")
 	}
 	return 0, 0
 }
 
-// VpuMemory 读取 VPU 堆内存（bytes）。仅 BM1684/BM1684X 支持（BM1688/CV186AH 无 vpu heap）。
+// VpuMemory 读取 VPU 堆内存（bytes）。仅 BM1684/BM1684X 支持（BM1688/CV186AH/CV84X2 无 vpu heap）。
 // 读 bm_vpu_heap_dump/summary 的 [2] 行（曾误读 vpp heap，已修正）。
 func (c *Collector) VpuMemory(chip string) (total, used int64) {
 	switch chip {
@@ -64,12 +79,12 @@ func (c *Collector) VpuMemory(chip string) (total, used int64) {
 // TpuMemory 读取 TPU 堆内存（bytes）。
 //
 //	BM1684/BM1684X → ionNpuHeapV1 [0]行
-//	BM1688/CV186AH → ionNpuHeapV2 [0]行
+//	BM1688/CV186AH/CV84X2 → ionNpuHeapV2 [0]行
 func (c *Collector) TpuMemory(chip string) (total, used int64) {
 	switch chip {
 	case "bm1684x", "bm1684":
 		return c.parseIonHeapLine(ionNpuHeapV1, "[0]")
-	case "bm1688", "cv186ah":
+	case "bm1688", "cv186ah", "cv84x6":
 		return c.parseIonHeapLine(ionNpuHeapV2, "[0]")
 	}
 	return 0, 0

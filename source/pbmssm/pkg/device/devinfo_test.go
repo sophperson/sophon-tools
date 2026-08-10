@@ -442,3 +442,37 @@ Features : fp asimd`
 		t.Errorf("cpuModel=%q, want bm1688", got)
 	}
 }
+
+// TestReadSnFromRawCv84x6 CV84X2 芯片型号 cv84x6 时，SN 应从 mmcblk0boot1 offset 0/32 读取
+// （与 bm1688 布局一致），而非 nvmem。
+func TestReadSnFromRawCv84x6(t *testing.T) {
+	dir := t.TempDir()
+
+	// 模拟 /proc/cpuinfo 为 cv84x6
+	cpuinfo := filepath.Join(dir, "cpuinfo")
+	if err := os.WriteFile(cpuinfo, []byte("model name : cv84x6\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 模拟 mmcblk0boot1：offset 0 chipSn，offset 32 deviceSn
+	boot1 := filepath.Join(dir, "boot1")
+	buf := make([]byte, 64)
+	copy(buf[0:], []byte("CV84X6CHIPSN001"))
+	copy(buf[32:], []byte("CV84X6DEVSN001"))
+	if err := os.WriteFile(boot1, buf, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// nvmem 路径不存在——若误走 nvmem 分支则 SN 为空
+	nvmem := filepath.Join(dir, "no-such-nvmem")
+
+	resetGlobals()
+	readSnFromRawWithPaths(cpuinfo, boot1, nvmem)
+
+	if ChipSn != "CV84X6CHIPSN001" {
+		t.Errorf("ChipSn=%q, want CV84X6CHIPSN001", ChipSn)
+	}
+	if DeviceSnEx != "CV84X6DEVSN001" {
+		t.Errorf("DeviceSnEx=%q, want CV84X6DEVSN001", DeviceSnEx)
+	}
+}

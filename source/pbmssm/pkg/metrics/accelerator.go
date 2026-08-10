@@ -31,7 +31,7 @@ func (c *Collector) VPUUsage() (enc, dec, encLinks, decLinks int64, ok bool) {
 	switch chip {
 	case "bm1684", "bm1684x":
 		path = vpuInfoPath
-	case "bm1688", "cv186ah":
+	case "bm1688", "cv186ah", "cv84x6":
 		path = vpuInfoSophPath
 	default:
 		return 0, 0, 0, 0, false
@@ -64,7 +64,7 @@ func (c *Collector) VPUUsage() (enc, dec, encLinks, decLinks int64, ok bool) {
 			decLinks = links[0] + links[1]
 			ok = true
 		}
-	case "bm1688", "cv186ah":
+	case "bm1688", "cv186ah", "cv84x6":
 		if len(percents) == 3 && len(links) == 3 {
 			enc = percents[0]
 			dec = (percents[1] + percents[2]) / 2
@@ -98,7 +98,7 @@ func (c *Collector) vppInfoPath() string {
 	switch c.ChipType() {
 	case "bm1684", "bm1684x":
 		return vppInfoPath
-	case "bm1688", "cv186ah":
+	case "bm1688", "cv186ah", "cv84x6":
 		return vppInfoSophPath
 	}
 	return ""
@@ -108,7 +108,7 @@ func (c *Collector) jpuInfoPath() string {
 	switch c.ChipType() {
 	case "bm1684", "bm1684x":
 		return jpuInfoPath
-	case "bm1688", "cv186ah":
+	case "bm1688", "cv186ah", "cv84x6":
 		return jpuInfoSophPath
 	}
 	return ""
@@ -135,14 +135,17 @@ func (c *Collector) parsePipePercent(path string) int64 {
 const (
 	tpuClkPathBm1684 = "/sys/kernel/debug/clk/tpll_clock/clk_rate"
 	tpuClkPathBm1688 = "/sys/kernel/debug/clk/clk_tpll/clk_rate"
+	tpuClkPathCv84x6 = "/sys/kernel/debug/clk/clk_tpu_ip/clk_rate"
 	vpuClkPathBm1684 = "/sys/kernel/debug/clk/clk_gate_axi10/clk_rate"
 	vpuClkPathBm1688 = "/sys/kernel/debug/clk/clk_cam0pll/clk_rate"
+	vpuClkPathCv84x6 = "/sys/kernel/debug/clk/clk_ve_axi/clk_rate"
 	cpuClkPathBm1684 = "/sys/kernel/debug/clk/clk_div_a53_1/clk_rate"
 	cpuClkPathBm1688 = "/sys/kernel/debug/clk/clk_a53pll/clk_rate"
+	cpuClkPathCv84x6 = "/sys/kernel/debug/clk/clk_ap_ca55/clk_rate"
 )
 
 // TPUFrequencyClk 读取 TPU 时钟频率 (Hz → MHz)。
-// 对齐 pget_info TPU_CLK。
+// 对齐 pget_info TPU_CLK。CV84X2 时钟名为 clk_tpu_ip。
 func (c *Collector) TPUFrequencyClk() int64 {
 	chip := c.ChipType()
 	var path string
@@ -151,6 +154,8 @@ func (c *Collector) TPUFrequencyClk() int64 {
 		path = tpuClkPathBm1684
 	case "bm1688", "cv186ah":
 		path = tpuClkPathBm1688
+	case "cv84x6":
+		path = tpuClkPathCv84x6
 	default:
 		return 0
 	}
@@ -158,7 +163,8 @@ func (c *Collector) TPUFrequencyClk() int64 {
 }
 
 // VPUFrequency 读取 VPU 时钟频率 (Hz → MHz)。
-// 对齐 pget_info VPU_CLK。bm1688/cv186ah 需 /2。
+// 对齐 pget_info VPU_CLK。bm1688/cv186ah 需 /2；CV84X2 的 clk_ve_axi 是 AXI 总线时钟，
+// 语义不同不除（真机实测核对后可调整）。
 func (c *Collector) VPUFrequency() int64 {
 	chip := c.ChipType()
 	var path string
@@ -167,6 +173,8 @@ func (c *Collector) VPUFrequency() int64 {
 		path = vpuClkPathBm1684
 	case "bm1688", "cv186ah":
 		path = vpuClkPathBm1688
+	case "cv84x6":
+		path = vpuClkPathCv84x6
 	default:
 		return 0
 	}
@@ -180,6 +188,7 @@ func (c *Collector) VPUFrequency() int64 {
 // CPUFrequencyClk 读取 CPU 时钟频率 (Hz → MHz)，sysfs 方式。
 // 与 cpuFrequency 不同，此方法读 debugfs clk 而非 cpuinfo/scaling_cur_freq。
 // 互补：scaling_cur_freq 反映实际频率，debugfs clk 反映基础时钟。
+// CV84X2 时钟名为 clk_ap_ca55。
 func (c *Collector) CPUFrequencyClk() int64 {
 	chip := c.ChipType()
 	var path string
@@ -188,6 +197,8 @@ func (c *Collector) CPUFrequencyClk() int64 {
 		path = cpuClkPathBm1684
 	case "bm1688", "cv186ah":
 		path = cpuClkPathBm1688
+	case "cv84x6":
+		path = cpuClkPathCv84x6
 	default:
 		return 0
 	}

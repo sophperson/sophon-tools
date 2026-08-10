@@ -69,6 +69,24 @@ func TestChipCapacity(t *testing.T) {
 			wantCalcCapacity: 32,
 			wantChipType:     2,
 		},
+		{
+			name:             "CV84X6",
+			chipModel:        "CV84X6",
+			wantCalcCapacity: 16,
+			wantChipType:     3,
+		},
+		{
+			name:             "lowercase cv84x6",
+			chipModel:        "cv84x6",
+			wantCalcCapacity: 16,
+			wantChipType:     3,
+		},
+		{
+			name:             "84X6 substring",
+			chipModel:        "CV84X6-PROD",
+			wantCalcCapacity: 16,
+			wantChipType:     3,
+		},
 	}
 
 	for _, tt := range tests {
