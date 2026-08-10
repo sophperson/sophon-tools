@@ -75,6 +75,20 @@ done
 # 清理 mingw posix shim
 rm -rf "$MINGW_SHIM" 2>/dev/null || true
 
+# ---- dfss pip 包（仅 all 全架构模式；wheel 内含 8 架构二进制，需先完成全部架构编译）----
+if [ "$ARCH" = "all" ]; then
+  echo "==> 构建 dfss pip 包 ..."
+  (cd "$SCRIPT_DIR/dfss_pip" && rm -rf dist build dfss.egg-info \
+    && rm -f dfss/output/dfss-cpp* dfss/output/git_version 2>/dev/null || true \
+    && python3 setup.py sdist bdist_wheel --universal) || {
+      echo "WARN: dfss pip 包构建失败（不影响二进制产物）" >&2
+    }
+  if ls "$SCRIPT_DIR/dfss_pip/dist"/dfss-*.whl >/dev/null 2>&1; then
+    cp "$SCRIPT_DIR/dfss_pip/dist"/dfss-*.whl "$OUTPUT_DIR/"
+    cp "$SCRIPT_DIR/dfss_pip/dist"/dfss-*.tar.gz "$OUTPUT_DIR/" 2>/dev/null || true
+  fi
+fi
+
 # 汇聚产物（linux_release.sh 输出到 source/pdfss_cpp/output/）
 local_out="$SCRIPT_DIR/output"
 if [ -d "$local_out" ]; then
