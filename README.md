@@ -11,24 +11,24 @@
 
 ## 子项目介绍
 
-| 子项目名称 | 源码路径 | 是否支持一键编译 | 简介 |
-| --- | --- | --- | --- |
-| [bmsec](./source/pbmsec) | source/pbmsec | 是 | 用于SE6/8高密度服务器的易用性命令行工具 |
-| [socbak](./source/psocbak)   | source/psocbak | 是 | 用于BM1684/BM1684X/BM1688/CV186AH芯片刷机包打包 |
-| [get_info](./source/pget_info) | source/pget_info | 是 | 用于获取BM1684/BM1684X/BM1688/CV186AH芯片的性能指标 |
-| [memory_edit](./source/pmemory_edit) | source/pmemory_edit | 是 | 用于修改BM1684/BM1684X/BM1688/CV186AH的设备内存布局 |
-| [qt_memory_edit](./source/pqt_memory_edit) | source/pqt_memory_edit | 否 | 图形化的远程修改设备内存布局的工具 |
-| [qt_batch_deployment](./source/pqt_batch_deployment) | source/pqt_batch_deployment | 否 | 基于SSH的批量部署工具 |
-| [dfss_cpp](./source/pdfss_cpp) | source/pdfss_cpp | 否 | DFSS工具CPP工程 |
-| [spacc_efuse_demo](./source/pspacc_efuse_demo) | source/pspacc_efuse_demo | 否 | efuse+spacc加解密Demo |
-| [SophUI](./source/pSophUI) | source/pSophUI | 否 | HDMI配网页面工程 |
-| [ota_update](./source/pota_update) | source/pota_update | 是 | OTA远程刷机工具 |
-| [mem_aging_test](./source/pmem_aging_test) | source/pmem_aging_test | 是 | DDR压测工具 |
-| [autotelecomm](./source/pautotelecomm) | source/pautotelecomm | 是 | 4G/5G自动拨号工具 |
-| [bm_set_ip](./source/pbm_set_ip) | source/pbm_set_ip | 否 | 配网工具 |
-| [phytool](./source/psoph_phytool) | source/psoph_phytool | 是 | 网口 PHY 寄存器读写工具（纯脚本，无编译） |
-| [bmssm](./source/pbmssm) | source/pbmssm | 否 | 设备端后端（:9779）：鉴权/硬件指标/systemd/端口/网络/OTA/文件。见 [API.md](./API.md) / [USAGE.md](./USAGE.md) / [BUILD.md](./BUILD.md) |
-| [sophliteos](./source/psophliteos) | source/psophliteos | 否 | 算力设备管理 Web 平台（Go+Vue，:8080），反代 bmssm。见 [API.md](./API.md) / [USAGE.md](./USAGE.md) / [BUILD.md](./BUILD.md) |
+| 子项目名称 | 源码路径 | 简介 |
+| --- | --- | --- |
+| [bmsec](./source/pbmsec) | source/pbmsec | 用于SE6/8高密度服务器的易用性命令行工具 |
+| [socbak](./source/psocbak)   | source/psocbak | 用于BM1684/BM1684X/BM1688/CV186AH芯片刷机包打包 |
+| [get_info](./source/pget_info) | source/pget_info | 用于获取BM1684/BM1684X/BM1688/CV186AH芯片的性能指标 |
+| [memory_edit](./source/pmemory_edit) | source/pmemory_edit | 用于修改BM1684/BM1684X/BM1688/CV186AH的设备内存布局 |
+| [qt_memory_edit](./source/pqt_memory_edit) | source/pqt_memory_edit | 图形化的远程修改设备内存布局的工具 |
+| [qt_batch_deployment](./source/pqt_batch_deployment) | source/pqt_batch_deployment | 基于SSH的批量部署工具 |
+| [dfss_cpp](./source/pdfss_cpp) | source/pdfss_cpp | DFSS工具CPP工程 |
+| [spacc_efuse_demo](./source/pspacc_efuse_demo) | source/pspacc_efuse_demo | efuse+spacc加解密Demo |
+| [SophUI](./source/pSophUI) | source/pSophUI | HDMI配网页面工程 |
+| [ota_update](./source/pota_update) | source/pota_update | OTA远程刷机工具 |
+| [mem_aging_test](./source/pmem_aging_test) | source/pmem_aging_test | DDR压测工具 |
+| [autotelecomm](./source/pautotelecomm) | source/pautotelecomm | 4G/5G自动拨号工具 |
+| [bm_set_ip](./source/pbm_set_ip) | source/pbm_set_ip | 配网工具 |
+| [phytool](./source/psoph_phytool) | source/psoph_phytool | 网口 PHY 寄存器读写工具（纯脚本，无编译） |
+| [bmssm](./source/pbmssm) | source/pbmssm | 设备端后端（:9779）：鉴权/硬件指标/systemd/端口/网络/OTA/文件。见 [API.md](./API.md) / [USAGE.md](./USAGE.md) / [BUILD.md](./BUILD.md) |
+| [sophliteos](./source/psophliteos) | source/psophliteos | 算力设备管理 Web 平台（Go+Vue，:8080），反代 bmssm。见 [API.md](./API.md) / [USAGE.md](./USAGE.md) / [BUILD.md](./BUILD.md) |
 
 ## 编译方式
 
@@ -70,10 +70,10 @@ bash release.sh --project pqt_memory_edit   # 宿主执行（pqt 系列在统一
 
 ### 传统方式（单子项目）
 
-1. 支持一键编译的子项目在本目录下执行 `release.sh` 后会将成果输出到 `output` 目录
-2. 不支持一键编译的子项目请参考源码目录中的 `readme.md` 自行准备环境编译
+在子项目源码目录下执行 `release.sh`（由统一 Docker 镜像 `sophon-tools-build` 在容器内编译），
+成果输出到 `output` 目录。需要自行准备环境时，参考源码目录中的 `readme.md`。
 
-## 一键编译的子项目的编译依赖
+## 编译依赖
 
 * 编译主机架构:amd64
 * 7z/zip
