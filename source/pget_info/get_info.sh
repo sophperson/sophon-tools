@@ -482,7 +482,7 @@ case "${CPU_MODEL}" in
     ""|null|cv186ah)
         if [ -d /proc/device-tree ]; then
             _cv_match=$(find /proc/device-tree -name compatible -type f \
-                -exec grep -la "cv84x6" {} + 2>/dev/null)
+                -exec grep -laE "cvitek,cv84x6-" {} + 2>/dev/null)
             if [ -n "${_cv_match}" ]; then
                 CPU_MODEL="cv84x6"
             fi
