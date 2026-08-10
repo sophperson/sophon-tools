@@ -5,7 +5,7 @@
 ## 获取与编译
 
 - 预编译二进制:[Releases](https://github.com/sophgo/sophon-tools/releases)
-- 自行编译:需 Rust + [`cross`](https://github.com/cross-rs/cross) + `upx`,执行 `bash build.sh`(产出在 `target/`)。
+- 自行编译:需 Rust + [`cross`](https://github.com/cross-rs/cross),执行 `bash build.sh`(产出在 `target/`)。
 - netplan 后端依赖 `/etc/netplan/01-netcfg.yaml` 存在且格式正确。
 
 ## 用法

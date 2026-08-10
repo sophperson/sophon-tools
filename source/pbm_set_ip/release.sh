@@ -48,22 +48,6 @@ for target in $TARGETS; do
     x86_64-*)  arch_suffix="amd64" ;;
     *) echo "ERROR: 未知 target '$target'，无法映射架构后缀" >&2; exit 1 ;;
   esac
-  # upx 仅 4.x+ 支持压缩 static-pie 产物（arm64 musl 静态 / amd64 static-pie）。
-  # 旧版 upx 3.x（如 ubuntu 仓库 upx-ucl 3.95）对 static-pie 直接报 not supported，
-  # 若静默吞掉会导致同一脚本在不同环境产物体积漂移（MYS-58 O-2）。
-  if command -v upx >/dev/null 2>&1; then
-    upx_major="$(upx --version 2>/dev/null | head -1 | awk '{print $2}' | cut -d. -f1)"
-    if [ -n "$upx_major" ] && [ "$upx_major" -ge 4 ] 2>/dev/null; then
-      echo "==> upx $upx_major.x 压缩 $local_bin"
-      if ! upx -9 --best --nrv2b --no-color "$local_bin" >/dev/null 2>&1; then
-        echo "WARN: upx 压缩 $local_bin 失败（产物未压缩，功能不受影响）" >&2
-      fi
-    else
-      echo "WARN: upx 版本过旧（$(upx --version 2>/dev/null | head -1)），不支持压缩 static-pie 产物，跳过压缩（若要压缩请用 upx 4.x+）" >&2
-    fi
-  else
-    echo "WARN: 未找到 upx，跳过压缩" >&2
-  fi
   cp "$local_bin" "$OUTPUT_DIR/bm_set_ip_${arch_suffix}_musl"
 done
 
