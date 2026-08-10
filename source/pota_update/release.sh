@@ -73,14 +73,9 @@ if [ "$BUILD_RET" = "0" ]; then
   fi
 fi
 
-# 统一接口：汇聚产物到 OUTPUT_DIR（校验通过才拷贝）
+# 统一接口：汇聚产物到 OUTPUT_DIR（校验通过才拷贝；只保留 zip，zip 内已含全部内容）
 mkdir -p "$OUTPUT_DIR"
 if [ "$BUILD_RET" = "0" ]; then
-  cp "$SCRIPT_DIR/output/pota_update_${VERSION}/ota_update.sh" "$OUTPUT_DIR/"
-  cp "$SCRIPT_DIR/output/pota_update_${VERSION}/get_network_info.sh" "$OUTPUT_DIR/" 2>/dev/null || true
-  if [ "$ARCH" = "arm64" ]; then
-    cp -r "$SCRIPT_DIR/output/pota_update_${VERSION}/arm64_bin" "$OUTPUT_DIR/" 2>/dev/null || true
-  fi
   cp "$PACKED" "$OUTPUT_DIR/"
   echo "==> pota_update 完成, 产物: $OUTPUT_DIR"
   ls -la "$OUTPUT_DIR"

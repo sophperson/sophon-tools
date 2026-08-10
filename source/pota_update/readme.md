@@ -20,8 +20,7 @@
 
 产物形态：
 
-- `ota_update.sh` + `get_network_info.sh`（arm64 时含 `arm64_bin/`，内含 bc）直接复制到输出目录，方便现场直接取用
-- `pota_update_<VERSION>.zip` 完整整包（含上述全部文件，顶层目录 `pota_update_<VERSION>/`），用于归档与分发
+- `pota_update_<VERSION>.zip` 完整整包（顶层目录 `pota_update_<VERSION>/`，内含 `ota_update.sh`、`get_network_info.sh`、arm64 时含 `arm64_bin/`），用于归档与分发。解包即得全部内容，输出目录只保留该 zip。
 
 部署时按 readme 使用方式，将 `ota_update.sh` 拷贝到刷机包内并改名（不要与刷机包中已有文件冲突），与 BOOT 文件同目录。
 
