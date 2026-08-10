@@ -472,8 +472,27 @@ DATE_TIME=$(date +"%Y-%m-%d %H:%M:%S %Z")
 CPU_MODEL=$(awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo)
 # ! [[ "$CPU_MODEL" == "" ]] || panic "cannot get cpu model from /proc/cpuinfo"
 
+# model name 兜底：CV84X2（SDK 标识 cv84x6）内核 compat 模式下可能输出 null/缺行/或 cv186ah
+#（0x27102014 & 0x7 常为 0x1 → 打印 "cv186ah"）。cv84x6 与 cv186ah 的 CLK/MCU 路径不同，必须区分。
+# 以 dts 为权威信号：CV84X2 内核 dts 递归含 "cvitek,cv84x6-*" compatible，而真实 bm1688/cv186ah
+# 的 dts 不含（且其根 compatible 同样为 "linux,dummy-virt" 不能直接判）。故当 CPU_MODEL 落入
+# 歧义集（null/空/cv186ah）且 dts 含 cv84x6 特征时，升级为 cv84x6，避免误入 PCIE 分支或 CV 家族共同路径。
+# 已确定的 bm1684x/bm1684/bm1688 model name 不作改写，保持既有行为。
+case "${CPU_MODEL}" in
+    ""|null|cv186ah)
+        if [ -d /proc/device-tree ]; then
+            _cv_match=$(find /proc/device-tree -name compatible -type f \
+                -exec grep -la "cv84x6" {} + 2>/dev/null)
+            if [ -n "${_cv_match}" ]; then
+                CPU_MODEL="cv84x6"
+            fi
+            unset _cv_match
+        fi
+        ;;
+esac
+
 # WORK MODE
-SOC_MODE_CPU_MODEL=("bm1684x" "bm1684" "bm1688" "cv186ah")
+SOC_MODE_CPU_MODEL=("bm1684x" "bm1684" "bm1688" "cv186ah" "cv84x6")
 WORK_MODE="PCIE"
 for element in "${SOC_MODE_CPU_MODEL[@]}"; do
     if [ "$element" == "$CPU_MODEL" ]; then
@@ -484,6 +503,15 @@ done
 if [[ "${WORK_MODE}" == "PCIE" ]]; then
     file_validate /dev/bmdev-ctl
 fi
+
+# SOC_FAMILY：归一化芯片家族，减少逐芯片双分支判断。
+# bm1688/cv186ah/cv84x6 同属 CV 系（C906），共享 dts 名/ION heap/vpuinfo/TPU_USAGE/SDK 版本路径。
+SOC_FAMILY=""
+case "${CPU_MODEL}" in
+    bm1684x|bm1684) SOC_FAMILY="bm1684" ;;
+    bm1688|cv186ah|cv84x6) SOC_FAMILY="cv" ;;
+    *) SOC_FAMILY="${CPU_MODEL}" ;;
+esac
 
 # SHUTDOWN_REASON
 SHUTDOWN_REASON=""
@@ -514,11 +542,11 @@ fi
 DDR_SIZE=0
 DDR_TYPE=""
 if [[ "${WORK_MODE}" == "SOC" ]]; then
-    if [[ "${CPU_MODEL}" == "bm1684x" ]] || [[ "${CPU_MODEL}" == "bm1684" ]]; then
-        DTS_MEM_FILE="/proc/device-tree/memory/reg"
-    elif [[ "${CPU_MODEL}" == "bm1688" ]] || [[ "${CPU_MODEL}" == "cv186ah" ]]; then
+    if [[ "${SOC_FAMILY}" == "cv" ]]; then
         DTS_MEM_FILE="/proc/device-tree/memory*/reg"
         DDR_TYPE=$(get_ddr_info 2>/dev/null)
+    else
+        DTS_MEM_FILE="/proc/device-tree/memory/reg"
     fi
     DDR_SIZE=0
     IFS=$'\n'
@@ -546,13 +574,13 @@ VPU_MEM="0"
 VPP_MEM="0"
 if [[ "${WORK_MODE}" == "SOC" ]]; then
     SYSTEM_MEM=$(vmstat -s 2>/dev/null | grep "total memory" | awk '{print $1}')
-    if [[ "${CPU_MODEL}" == "bm1684x" ]] || [[ "${CPU_MODEL}" == "bm1684" ]]; then
+    if [[ "${SOC_FAMILY}" == "cv" ]]; then
+        TPU_MEM=$(cat /sys/kernel/debug/ion/cvi_npu_heap_dump/total_mem 2>/dev/null | tr -d '\0')
+        VPP_MEM=$(cat /sys/kernel/debug/ion/cvi_vpp_heap_dump/total_mem 2>/dev/null | tr -d '\0')
+    else
         TPU_MEM=$(cat /sys/kernel/debug/ion/bm_npu_heap_dump/total_mem 2>/dev/null | tr -d '\0')
         VPU_MEM=$(cat /sys/kernel/debug/ion/bm_vpu_heap_dump/total_mem 2>/dev/null | tr -d '\0')
         VPP_MEM=$(cat /sys/kernel/debug/ion/bm_vpp_heap_dump/total_mem 2>/dev/null | tr -d '\0')
-    elif [[ "${CPU_MODEL}" == "bm1688" ]] || [[ "${CPU_MODEL}" == "cv186ah" ]]; then
-        TPU_MEM=$(cat /sys/kernel/debug/ion/cvi_npu_heap_dump/total_mem 2>/dev/null | tr -d '\0')
-        VPP_MEM=$(cat /sys/kernel/debug/ion/cvi_vpp_heap_dump/total_mem 2>/dev/null | tr -d '\0')
     fi
     SYSTEM_MEM=$(( SYSTEM_MEM / 1024 ))
     TPU_MEM=$(( TPU_MEM / 1024 / 1024 ))
@@ -663,22 +691,22 @@ function get_cpu_all() {
 # DTS_NAME
 DTS_NAME=""
 if [[ "${WORK_MODE}" == "SOC" ]]; then
-    if [[ "${CPU_MODEL}" == "bm1684x" ]] || [[ "${CPU_MODEL}" == "bm1684" ]]; then
-        DTS_NAME=$(cat /proc/device-tree/info/file-name 2>/dev/null | tr -d '\0')
-    elif [[ "${CPU_MODEL}" == "bm1688" ]] || [[ "${CPU_MODEL}" == "cv186ah" ]]; then
+    if [[ "${SOC_FAMILY}" == "cv" ]]; then
         DTS_NAME=$(od_read_char 160 32 "/dev/mmcblk0boot1")
+    else
+        DTS_NAME=$(cat /proc/device-tree/info/file-name 2>/dev/null | tr -d '\0')
     fi
 fi
 
 # DEVICE_MODEL
 DEVICE_MODEL=""
 if [[ "${WORK_MODE}" == "SOC" ]]; then
-    if [[ "${CPU_MODEL}" == "bm1684x" ]] || [[ "${CPU_MODEL}" == "bm1684" ]]; then
-        DEVICE_MODEL=$(grep "model" /sys/class/i2c-dev/i2c-1/device/1-0017/information 2>/dev/null | awk -F'"' '{print $4}')
-    elif [[ "${CPU_MODEL}" == "bm1688" ]] || [[ "${CPU_MODEL}" == "cv186ah" ]]; then
+    if [[ "${SOC_FAMILY}" == "cv" ]]; then
         DEVICE_MODEL_PRODUCT=$(od_read_char 208 16 "/dev/mmcblk0boot1")
         DEVICE_MODEL_MODULE_TYPE=$(od_read_char 112 16 "/dev/mmcblk0boot1")
         DEVICE_MODEL="${DEVICE_MODEL_PRODUCT} ${DEVICE_MODEL_MODULE_TYPE}"
+    else
+        DEVICE_MODEL=$(grep "model" /sys/class/i2c-dev/i2c-1/device/1-0017/information 2>/dev/null | awk -F'"' '{print $4}')
     fi
 fi
 
@@ -687,15 +715,22 @@ CPU_CLK=""
 TPU_CLK=""
 VPU_CLK=""
 if [[ "${WORK_MODE}" == "SOC" ]]; then
-    if [[ "${CPU_MODEL}" == "bm1684x" ]] || [[ "${CPU_MODEL}" == "bm1684" ]]; then
-        CPU_CLK=$(cat /sys/kernel/debug/clk/clk_div_a53_1/clk_rate 2>/dev/null| tr -d '\0')
-        TPU_CLK=$(cat /sys/kernel/debug/clk/tpll_clock/clk_rate 2>/dev/null| tr -d '\0')
-        VPU_CLK=$(cat /sys/kernel/debug/clk/clk_gate_axi10/clk_rate 2>/dev/null| tr -d '\0')
-    elif [[ "${CPU_MODEL}" == "bm1688" ]] || [[ "${CPU_MODEL}" == "cv186ah" ]]; then
+    if [[ "${CPU_MODEL}" == "cv84x6" ]]; then
+        # CV84X6 时钟（drivers/clk/cvitek/clk-cv84x6.c）：
+        #   CPU 为 Cortex-A55 → clk_ap_ca55；TPU → clk_tpu_ip；
+        #   VPU 无独立 PLL，编解码走 clk_ve_axi（AXI 总线时钟，语义与 bm1688 的 clk_cam0pll PLL 不同，不 ÷2）
+        CPU_CLK=$(cat /sys/kernel/debug/clk/clk_ap_ca55/clk_rate 2>/dev/null| tr -d '\0')
+        TPU_CLK=$(cat /sys/kernel/debug/clk/clk_tpu_ip/clk_rate 2>/dev/null| tr -d '\0')
+        VPU_CLK=$(cat /sys/kernel/debug/clk/clk_ve_axi/clk_rate 2>/dev/null| tr -d '\0')
+    elif [[ "${SOC_FAMILY}" == "cv" ]]; then
         CPU_CLK=$(cat /sys/kernel/debug/clk/clk_a53pll/clk_rate 2>/dev/null| tr -d '\0')
         TPU_CLK=$(cat /sys/kernel/debug/clk/clk_tpll/clk_rate 2>/dev/null| tr -d '\0')
         VPU_CLK=$(cat /sys/kernel/debug/clk/clk_cam0pll/clk_rate 2>/dev/null| tr -d '\0')
         VPU_CLK=$(( VPU_CLK / 2 ))
+    else
+        CPU_CLK=$(cat /sys/kernel/debug/clk/clk_div_a53_1/clk_rate 2>/dev/null| tr -d '\0')
+        TPU_CLK=$(cat /sys/kernel/debug/clk/tpll_clock/clk_rate 2>/dev/null| tr -d '\0')
+        VPU_CLK=$(cat /sys/kernel/debug/clk/clk_gate_axi10/clk_rate 2>/dev/null| tr -d '\0')
     fi
 fi
 
@@ -703,13 +738,15 @@ fi
 CHIP_SN=""
 DEVICE_SN=""
 if [[ "${WORK_MODE}" == "SOC" ]]; then
-    if [[ "${CPU_MODEL}" == "bm1684x" ]] || [[ "${CPU_MODEL}" == "bm1684" ]]; then
+    if [[ "${SOC_FAMILY}" == "cv" ]]; then
+        # CV 系（bm1688/cv186ah/cv84x6）SN 烧录于 eMMC boot1 分区；
+        # CV84X6 u-boot 同样从 boot1 读 DTS 名(0xa0)/MAC(0x40)，SN 沿用偏移 0/32
+        CHIP_SN=$(od_read_char 0 32 "/dev/mmcblk0boot1")
+        DEVICE_SN=$(od_read_char 32 32 "/dev/mmcblk0boot1")
+    else
         # CHIP_SN=$(grep "product sn" /sys/class/i2c-dev/i2c-1/device/1-0017/information 2>/dev/null | awk -F'"' '{print $4}')
         CHIP_SN=$(od_read_char 0 32 "/sys/bus/nvmem/devices/1-006a0/nvmem")
         DEVICE_SN=$(od_read_char 512 32 "/sys/bus/nvmem/devices/1-006a0/nvmem")
-    elif [[ "${CPU_MODEL}" == "bm1688" ]] || [[ "${CPU_MODEL}" == "cv186ah" ]]; then
-        CHIP_SN=$(od_read_char 0 32 "/dev/mmcblk0boot1")
-        DEVICE_SN=$(od_read_char 32 32 "/dev/mmcblk0boot1")
     fi
 fi
 
@@ -809,10 +846,10 @@ fi
 # TPU_USAGE
 TPU_USAGE=""
 if [[ "${WORK_MODE}" == "SOC" ]]; then
-    if [[ "${CPU_MODEL}" == "bm1684x" ]] || [[ "${CPU_MODEL}" == "bm1684" ]]; then
-        TPU_USAGE=$(cat /sys/class/bm-tpu/bm-tpu0/device/npu_usage 2>/dev/null| awk -F':' '{print $2}' | awk '{print $1}')
-    elif [[ "${CPU_MODEL}" == "bm1688" ]] || [[ "${CPU_MODEL}" == "cv186ah" ]]; then
+    if [[ "${SOC_FAMILY}" == "cv" ]]; then
         TPU_USAGE=$(cat /sys/class/bm-tpu/bm-tpu0/device/npu_usage 2>/dev/null| awk -F':' '{print $2}' | awk '{print $1}' | tr '\n' ' ' | sed 's/ *$//')
+    else
+        TPU_USAGE=$(cat /sys/class/bm-tpu/bm-tpu0/device/npu_usage 2>/dev/null| awk -F':' '{print $2}' | awk '{print $1}')
     fi
 fi
 
@@ -820,11 +857,11 @@ fi
 VPU_USAGE=""
 VPP_USAGE=""
 if [[ "${WORK_MODE}" == "SOC" ]]; then
-    if [[ "${CPU_MODEL}" == "bm1684x" ]] || [[ "${CPU_MODEL}" == "bm1684" ]]; then
+    if [[ "${SOC_FAMILY}" == "cv" ]]; then
+        VPU_USAGE=$(cat /proc/soph/vpuinfo 2>/dev/null| tr -d '\n' | grep -ao ':[0-9]*%' | tr -d ':' | tr '\n' ',' | tr -d '%' | sed 's/ $//' | sed 's/,$//')
+    else
         VPU_USAGE=$(cat /proc/vpuinfo 2>/dev/null| tr -d '\n' | grep -ao ':[0-9]*%' | tr -d ':' | tr '\n' ',' | tr -d '%' | sed 's/ $//' | sed 's/,$//')
         VPP_USAGE=$(cat /proc/vppinfo 2>/dev/null| tr -d '\n' | grep -ao ':[0-9]*%' | tr -d ':' | tr '\n' ',' | tr -d '%' | sed 's/ $//' | sed 's/,$//')
-    elif [[ "${CPU_MODEL}" == "bm1688" ]] || [[ "${CPU_MODEL}" == "cv186ah" ]]; then
-        VPU_USAGE=$(cat /proc/soph/vpuinfo 2>/dev/null| tr -d '\n' | grep -ao ':[0-9]*%' | tr -d ':' | tr '\n' ',' | tr -d '%' | sed 's/ $//' | sed 's/,$//')
     fi
 fi
 
@@ -833,13 +870,13 @@ TPU_MEM_USAGE="0"
 VPU_MEM_USAGE="0"
 VPP_MEM_USAGE="0"
 if [[ "${WORK_MODE}" == "SOC" ]]; then
-    if [[ "${CPU_MODEL}" == "bm1684x" ]] || [[ "${CPU_MODEL}" == "bm1684" ]]; then
+    if [[ "${SOC_FAMILY}" == "cv" ]]; then
+        TPU_MEM_USAGE=$(get_ion_usage "/sys/kernel/debug/ion/cvi_npu_heap_dump")
+        VPP_MEM_USAGE=$(get_ion_usage "/sys/kernel/debug/ion/cvi_vpp_heap_dump")
+    else
         TPU_MEM_USAGE=$(get_ion_usage "/sys/kernel/debug/ion/bm_npu_heap_dump")
         VPU_MEM_USAGE=$(get_ion_usage "/sys/kernel/debug/ion/bm_vpu_heap_dump")
         VPP_MEM_USAGE=$(get_ion_usage "/sys/kernel/debug/ion/bm_vpp_heap_dump")
-    elif [[ "${CPU_MODEL}" == "bm1688" ]] || [[ "${CPU_MODEL}" == "cv186ah" ]]; then
-        TPU_MEM_USAGE=$(get_ion_usage "/sys/kernel/debug/ion/cvi_npu_heap_dump")
-        VPP_MEM_USAGE=$(get_ion_usage "/sys/kernel/debug/ion/cvi_vpp_heap_dump")
     fi
 fi
 
@@ -847,15 +884,21 @@ fi
 BOARD_TYPE=""
 MCU_VERSION=""
 if [[ "${WORK_MODE}" == "SOC" ]]; then
-    if [[ "${CPU_MODEL}" == "bm1684x" ]] || [[ "${CPU_MODEL}" == "bm1684" ]]; then
-        BOARD_TYPE=$(grep "board type" /sys/class/i2c-dev/i2c-1/device/1-0017/information 2>/dev/null | awk -F'"' '{print $4}' 2>/dev/null)
-        MCU_VERSION=$(grep "mcu version" /sys/class/i2c-dev/i2c-1/device/1-0017/information 2>/dev/null | awk -F'"' '{print $4}' 2>/dev/null)
-    elif [[ "${CPU_MODEL}" == "bm1688" ]] || [[ "${CPU_MODEL}" == "cv186ah" ]]; then
+    if [[ "${CPU_MODEL}" == "cv84x6" ]]; then
+        # CV84X6 MCU 挂在 I2C1 地址 0x17，版本走 I2C 命令字节（cmd 0x00/0x01/0x02），
+        # 协议与 bm1688 的 devmem 0x05026024 不同；初版留空，避免读错地址返回垃圾值。
+        # 后续如需补齐，走 i2cget -f -y 1 0x17 <cmd> 实验路径。
+        BOARD_TYPE=""
+        MCU_VERSION=""
+    elif [[ "${SOC_FAMILY}" == "cv" ]]; then
         mcu_reg=$(busybox devmem 0x05026024 2>/dev/null)
         mcu_1=$(( (mcu_reg & 0xFF0000) >> 16 ))
         mcu_2=$(( (mcu_reg & 0xFF00) >> 8 ))
         mcu_3=$(( (mcu_reg & 0xFF) >> 0 ))
         MCU_VERSION="$mcu_1"."$mcu_2"."$mcu_3"
+    else
+        BOARD_TYPE=$(grep "board type" /sys/class/i2c-dev/i2c-1/device/1-0017/information 2>/dev/null | awk -F'"' '{print $4}' 2>/dev/null)
+        MCU_VERSION=$(grep "mcu version" /sys/class/i2c-dev/i2c-1/device/1-0017/information 2>/dev/null | awk -F'"' '{print $4}' 2>/dev/null)
     fi
 fi
 
@@ -890,23 +933,22 @@ SDK_VERSION=""
 LIBSOPHON_VERSION=""
 SOPHON_MEDIA_VERSION=""
 if [[ "${WORK_MODE}" == "SOC" ]]; then
-    if [[ "${CPU_MODEL}" == "bm1684x" ]] || [[ "${CPU_MODEL}" == "bm1684" ]]; then
-        if [[ "${KERNEL_VERSION}" == "5.4."* ]]; then
-            SDK_VERSION=$(/usr/sbin/bm_version 2>/dev/null | grep "SophonSDK version" | sed 's|SophonSDK version: ||g')
-            LIBSOPHON_VERSION=$(readlink /opt/sophon/libsophon-current 2>/dev/null | awk -F'-' '{print $2}')
-            SOPHON_MEDIA_VERSION=$(readlink /opt/sophon/sophon-ffmpeg-latest 2>/dev/null | awk -F'_' '{print $2}')
-        elif [[ "${KERNEL_VERSION}" == "4.9."* ]]; then
-            SDK_VERSION=$(grep "VERSION" /system/data/buildinfo.txt 2>/dev/null | awk '{print $2}')
-        fi
-    elif [[ "${CPU_MODEL}" == "bm1688" ]] || [[ "${CPU_MODEL}" == "cv186ah" ]]; then
-        # 新格式 bm_version 首行 "SophonSDK(BM1688) 2.1" → 取 ')' 之后的版本；
+    if [[ "${SOC_FAMILY}" == "cv" ]]; then
+        # 新格式 bm_version 首行 "SophonSDK(<chip>) 2.1" → 取 ')' 之后的版本；
         # 旧格式 "Gemini_SDK: x.y" 行次之。两者都缺失则 SDK_VERSION 留空。
+        # CV84X6 的 bm_version 首行即 "SophonSDK(cv84x6) 2.x"，该正则已覆盖。
         SDK_VERSION=$(/usr/sbin/bm_version 2>/dev/null | grep -E "^SophonSDK\(" | sed -E 's|^SophonSDK\([^)]*\)[[:space:]]*||g')
         if [[ -z "${SDK_VERSION}" ]]; then
             SDK_VERSION=$(/usr/sbin/bm_version 2>/dev/null | grep "Gemini_SDK" | sed 's|Gemini_SDK: ||g')
         fi
         LIBSOPHON_VERSION=$(readlink /opt/sophon/libsophon-current 2>/dev/null | awk -F'-' '{print $2}')
         SOPHON_MEDIA_VERSION=$(readlink /opt/sophon/sophon-ffmpeg-latest 2>/dev/null | awk -F'_' '{print $2}')
+    elif [[ "${KERNEL_VERSION}" == "5.4."* ]]; then
+        SDK_VERSION=$(/usr/sbin/bm_version 2>/dev/null | grep "SophonSDK version" | sed 's|SophonSDK version: ||g')
+        LIBSOPHON_VERSION=$(readlink /opt/sophon/libsophon-current 2>/dev/null | awk -F'-' '{print $2}')
+        SOPHON_MEDIA_VERSION=$(readlink /opt/sophon/sophon-ffmpeg-latest 2>/dev/null | awk -F'_' '{print $2}')
+    elif [[ "${KERNEL_VERSION}" == "4.9."* ]]; then
+        SDK_VERSION=$(grep "VERSION" /system/data/buildinfo.txt 2>/dev/null | awk '{print $2}')
     fi
 else
     DRIVER_RELEASE_VERSION=$(cat /proc/bmsophon/driver_version 2>/dev/null | awk -F':' '{print $2}' | awk '{print $1}')
