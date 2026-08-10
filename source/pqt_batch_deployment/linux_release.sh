@@ -66,11 +66,11 @@ pushd bintools/linuxdeployqt-continuous >/dev/null
 qmake -config release
 make -j"$(nproc)"
 popd >/dev/null # linuxdeployqt-continuous
-# linuxdeployqt -appimage 会调用 PATH 里的 appimagetool；容器内可能缺失，失败时容忍
-# （打包由下方手动 appimagetool 完成，与原脚本行为一致）
+# linuxdeployqt 用 -bundle-non-qt-libs 只做依赖收集（不 -appimage 打包），
+# 避免同一 AppDir 被打出多份 AppImage（-appimage 会附加 git hash 到文件名）。
+# 最终 AppImage 由下方手动 appimagetool 一次性生成（no_ui 不作为独立产物，见 MYSWY 决定）。
 export PATH="$WORK_DIR/build/bintools:$PATH"
-./bintools/linuxdeployqt-continuous/bin/linuxdeployqt Appdir/qt_batch_deployment_no_ui.desktop -appimage -verbose=2 || true
-./bintools/linuxdeployqt-continuous/bin/linuxdeployqt Appdir/qt_batch_deployment.desktop -appimage -verbose=2 || true
+./bintools/linuxdeployqt-continuous/bin/linuxdeployqt Appdir/qt_batch_deployment.desktop -bundle-non-qt-libs -verbose=2 || true
 sed -i "s/Exec=qt_batch_deployment/Exec=qt_batch_deployment_run.sh/" Appdir/qt_batch_deployment.desktop
 rm Appdir/qt_batch_deployment_no_ui.desktop
 rm Appdir/qt_batch_deployment_no_ui.png

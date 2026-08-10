@@ -151,6 +151,14 @@ build_linux() {
 build_windows() {
   echo "==> windows 端交叉编译..."
   prepare_memory_edit_tarxz
+  # 产物基线名（无版本号）：裸名 exe 由 CMake install(TARGETS) 生成，是中间产物；
+  # 最终交付的是带版本号的 <basename>_<ver>.exe，收拢时只保留后者。
+  local exe_basename
+  case "$PROJECT" in
+    pqt_memory_edit) exe_basename="qt_mem_edit.exe" ;;
+    pqt_batch_deployment) exe_basename="qt_batch_deployment.exe" ;;
+    *) exe_basename="" ;;
+  esac
   local qt_prefix="${QT_PREFIX:-/opt/qt-mingw}"
   # 确保 Qt mingw 静态库存在
   if [[ ! -f "${qt_prefix}/lib/libQt5Widgets.a" ]]; then
@@ -194,9 +202,10 @@ TOOL
     make install
     echo "==> windows exe 产物:"
     find . -maxdepth 3 -name '*.exe' | head -5
-    # 收拢最终 exe 到 OUTPUT_DIR 根，清理构建中间产物（先 cd 出去再删，避免删除当前工作目录）
+    # 收拢最终 exe 到 OUTPUT_DIR 根（只留带版本号的 exe，排除裸名中间产物），
+    # 清理构建中间产物（先 cd 出去再删，避免删除当前工作目录）
     local out_root="${wdir%/.build-win}"
-    find . -maxdepth 3 -name '*.exe' -exec cp -f {} "${out_root}"/ \;
+    find . -maxdepth 3 -name '*.exe' ! -name "${exe_basename}" -exec cp -f {} "${out_root}"/ \;
     cd "${out_root}"
     rm -rf "${wdir}" 2>/dev/null || sudo rm -rf "${wdir}" 2>/dev/null || true
     return 0
@@ -213,6 +222,7 @@ TOOL
     -v "${qt_prefix}":/opt/qt-mingw \
     -e PQT_WIN_OUT="/pqt-win-output" \
     -e PQT_VERSION="${VERSION}" \
+    -e EXE_BASENAME="${exe_basename}" \
     "${image}" bash -c '
       set -e
       export DEBIAN_FRONTEND=noninteractive
@@ -253,9 +263,10 @@ TOOL
       make install
       echo "==> windows exe 产物:"
       find . -maxdepth 3 -name '*.exe' | head -5
-      # 收拢最终 exe 到输出根目录（挂载的 /pqt-out-root = OUTPUT_DIR），构建中间产物留在 .build-win
+      # 收拢最终 exe 到输出根目录（挂载的 /pqt-out-root = OUTPUT_DIR），
+      # 只留带版本号的 exe，排除裸名中间产物；构建中间产物留在 .build-win
       mkdir -p /pqt-out-root
-      find . -maxdepth 3 -name '*.exe' -exec cp -f {} /pqt-out-root/ \;
+      find . -maxdepth 3 -name '*.exe' ! -name "${EXE_BASENAME}" -exec cp -f {} /pqt-out-root/ \;
     '
 
   # 构建中间产物（.build-win）留在宿主 wdir，构建完成后清理
