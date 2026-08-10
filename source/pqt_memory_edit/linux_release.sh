@@ -54,10 +54,12 @@ tar -xaf "$WORK_DIR/appimage/bintools/linuxdeployqt.tar.gz" -C "$WORK_DIR/appima
 
 pushd "$WORK_DIR/appimage" >/dev/null
 # linuxdeployqt 为源码包，需现场 qmake+make；编译/运行失败即退出，
-# 否则 AppImage 缺 Qt 库且不报错（依赖库收集由它完成）
+# 否则 AppImage 缺 Qt 库且不报错（依赖库收集由它完成）。
+# 用 -bundle-non-qt-libs 只做依赖收集（不 -appimage 打包），
+# 最终 AppImage 由下方手动 appimagetool 一次性生成，避免同一 AppDir 打出两份。
 (cd bintools/linuxdeployqt-continuous && qmake linuxdeployqt.pro && make -j"$(nproc)")
 export PATH="$PWD/bintools:$PATH"
-./bintools/linuxdeployqt-continuous/bin/linuxdeployqt Appdir/qt_mem_edit.desktop -appimage -verbose=2
+./bintools/linuxdeployqt-continuous/bin/linuxdeployqt Appdir/qt_mem_edit.desktop -bundle-non-qt-libs -verbose=2
 ./bintools/appimagetool --comp xz Appdir
 cp ./*.AppImage "$WORK_DIR"/
 popd >/dev/null # appimage
