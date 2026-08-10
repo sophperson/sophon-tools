@@ -42,14 +42,14 @@ bash docker/build.sh --with-dfss-toolchains --with-qt-mingw --with-sophui-toolch
 dfss 下载细节：
 
 - dfss 文件名约定 `<镜像名>-<tag>.tar.zst`（冒号不适合文件路径，用 `-` 分隔）
-- 默认 dfss 路径前缀 `open@sophgo.com:/`，可用环境变量 `DFSS_IMAGE_BASE` 覆盖：
+- 默认 dfss 路径前缀 `open@sophgo.com:/toolchains/sophon-tools/`，可用环境变量 `DFSS_IMAGE_BASE` 覆盖：
   `DFSS_IMAGE_BASE=open@sophgo.com:/some/path bash docker/build.sh --from-dfss`
 - 依赖 `python3 -m dfss`（dfss-cpp 客户端），从 sophgo sftp 服务器下载
 
 ### 手动拉取（等价命令）
 
 ```bash
-python3 -m dfss --url=open@sophgo.com:/sophon-tools-build-unified-v1.1.0.tar.zst
+python3 -m dfss --url=open@sophgo.com:/toolchains/sophon-tools/sophon-tools-build-unified-v1.1.0.tar.zst
 docker load -i sophon-tools-build-unified-v1.1.0.tar.zst
 # 加载后镜像 tag: sophon-tools-build:unified-v1.1.0
 ```

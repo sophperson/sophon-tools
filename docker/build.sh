@@ -58,7 +58,7 @@ FULL_IMAGE="${IMAGE_NAME}:${TAG}"
 # ---- 从 dfss 服务器拉取已构建镜像 ----
 # dfss 文件名为 <image>-<tag>.tar.zst（冒号不适合文件路径，用 - 分隔）
 DFSS_FILE="${IMAGE_NAME}-${TAG}.tar.zst"
-DFSS_IMAGE_PATH="${DFSS_IMAGE_PATH:-${DFSS_IMAGE_BASE:-open@sophgo.com:/}${DFSS_FILE}}"
+DFSS_IMAGE_PATH="${DFSS_IMAGE_PATH:-${DFSS_IMAGE_BASE:-open@sophgo.com:/toolchains/sophon-tools/}${DFSS_FILE}}"
 
 fetch_from_dfss() {
   echo "==> 从 dfss 拉取已构建镜像 ${FULL_IMAGE} ..."
