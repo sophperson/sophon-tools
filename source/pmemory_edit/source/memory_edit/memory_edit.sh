@@ -376,7 +376,7 @@ elif [ $# -eq 2 ]; then
 else
 	if [[ "$runtime_info_target" == "bm1684" ]]; then
 		dts_file_name=$(tr -d '\0' </proc/device-tree/info/file-name)
-	elif [[ "$runtime_info_target" == "bm1688" ]]; then
+	elif [[ "$runtime_info_target" == "bm1688" || "$runtime_info_target" == "cv84x6" ]]; then
 		# dts_file_name="athena2_wevb_1686a_emmc.dts"
 		sudo dd if=/dev/mmcblk0boot1 of=${memory_edit_PWD}/bm1688_dts_name.log count=32 bs=1 skip=160 2> /dev/null
 		dts_file_name=$(tr -d '\0' < ${memory_edit_PWD}/bm1688_dts_name.log)
@@ -398,6 +398,17 @@ echo "Info: use dts file $file_path"
 # 判断芯片型号
 if [[ $dts_file_name == *"bm1684x"* ]]; then
 	soc_name="bm1684x"
+elif [[ "$runtime_info_target" == "cv84x6" ]]; then
+	soc_name="cv84x6"
+	unset full_mem[1]
+	unset user_mem[2]
+elif [[ $dts_file_name == *"cv84x6"* ]]; then
+	# CV84X2 真机 boot 文件为 boot.itb，与 bm1688 相同，无法凭 boot 文件区分，
+	# 需根据 dts 名自动识别 cv84x6（SDK 板名统一含 cv84x6 前缀）
+	runtime_info_target="cv84x6"
+	soc_name="cv84x6"
+	unset full_mem[1]
+	unset user_mem[2]
 elif [[ "$runtime_info_target" == "bm1688" ]]; then
 	soc_name="bm1688"
 	unset full_mem[1]
@@ -473,7 +484,7 @@ get_mem_info "$file_path" "smmu_mem" "reg =" >> $log_file_path; smmu_mem_size=$g
 get_mem_info "$file_path" "bl31_mem" "reg =" >> $log_file_path; bl31_mem_size=$get_mem_info_data
 get_mem_info "$file_path" "ramoops_mem" "reg =" >> $log_file_path; ramoops_mem_size=$get_mem_info_data; ramoops_mem_start=$get_mem_info_data_start
 npu_size_add=0
-if [[ $runtime_info_target == "bm1688" ]]; then
+if [[ $runtime_info_target == "bm1688" || $runtime_info_target == "cv84x6" ]]; then
 	get_mem_info "$file_path" "linux,cma" "alloc-ranges =" >> $log_file_path;
 	bm1688_cma_mem_end=$((${get_mem_info_data_end} % ${size_4g}))
 	npu_size_add=$((${npu_size_add} + ${bm1688_cma_mem_end} + ${size_1m} * 200))
@@ -508,15 +519,25 @@ if [[ $runtime_info_target == "bm1688" ]]; then
 	else
 		memory_ddr_index["vpp"]="0x01"
 	fi
+elif [[ $runtime_info_target == "cv84x6" ]]; then
+	# CV84X6: 单块 32GB 内存基址 0x10_00000000，npu/vpp 均处于同一地址空间，
+	# add_ion 的 ddr 索引必须与 memory 基址的 4G 单元一致，否则 reg 会写出错误物理地址
+	memory_ddr_index["npu"]="0x10"
+	memory_ddr_index["vpp"]="0x10"
+	# dts 中 ion_vpp_mem 顶部 2MB 预留给 FREERTOS，vpp 顶对齐需避开
+	vpp_size_add=$(($size_1m * 2))
 fi
 # 打印最大可能ion内存分配空间
 memory_ddr_size["0x01"]=$ddr1_size
 memory_ddr_size["0x02"]=$ddr2_size
 memory_ddr_size["0x03"]=$ddr3_size
 memory_ddr_size["0x04"]=$ddr4_size
+if [[ $runtime_info_target == "cv84x6" ]]; then
+	memory_ddr_size["0x10"]=$ddr1_size
+fi
 echo "Info: =======================================================================" | tee -a $log_file_path
 echo "Info: get max memory size ..." | tee -a $log_file_path
-if [[ $runtime_info_target == "bm1688" ]]; then
+if [[ $runtime_info_target == "bm1688" || $runtime_info_target == "cv84x6" ]]; then
 	echo "Info: max npu+vpp size: $(printf "0x%x" $(($ddr_size - $npu_size_add))) [$(printf "%d MiB" "$(($(($ddr_size - $npu_size_add)) / $SIZE1M))")]" | tee -a $log_file_path
 	echo "Info: max npu size: $(printf "0x%x" $(($ddr_size - $npu_size_add))) [$(printf "%d MiB" "$(($(($ddr_size - $npu_size_add)) / $SIZE1M))")]" | tee -a $log_file_path
 elif [[ $runtime_info_target == "bm1684" ]]; then
@@ -533,6 +554,10 @@ elif [[ $runtime_info_target == "bm1688" ]]; then
 	else
 		echo "Info: max vpp size: $(printf "0x%x" $(($size_4g - $vpp_size_add))) [$(printf "%d MiB" "$(($(($size_4g - $vpp_size_add)) / $SIZE1M))")]"| tee -a $log_file_path
 	fi
+elif [[ $runtime_info_target == "cv84x6" ]]; then
+	# MYSWY 决策：cv84x6 的 vpp 校验上限为 8GB，打印与校验保持一致
+	vpp_max_size=$(($size_4g * 2))
+	echo "Info: max vpp size: $(printf "0x%x" $vpp_max_size) [$(printf "%d MiB" "$(($vpp_max_size / $SIZE1M))")]" | tee -a $log_file_path
 fi
 # 解析设备树，获取vpp和npu的ion内存空间的全局唯一索引
 flag=0
@@ -542,7 +567,7 @@ bmtpu_mem=()
 while IFS= read -r line; do
 	if [[ $line =~ "bitmain,tpu-1684" ]] && [[ $runtime_info_target == "bm1684" ]];then
 			flag=1
-	elif [[ $line =~ "cvitek,tpu" ]] && [[ $runtime_info_target == "bm1688" ]];then
+	elif [[ $line =~ "cvitek,tpu" ]] && [[ $runtime_info_target == "bm1688" || $runtime_info_target == "cv84x6" ]];then
 			flag=1
 	fi
 	if [[ $line =~ "memory-region" ]] && [[ $flag -eq 1 ]];then
@@ -553,7 +578,9 @@ while IFS= read -r line; do
 		if [[ $runtime_info_target == "bm1684" ]]; then
 			memory_phandle['npu']=${bmtpu_mem[3]}
 			memory_phandle['vpp']=${bmtpu_mem[4]}
-		elif [[ $runtime_info_target == "bm1688" ]]; then
+		elif [[ $runtime_info_target == "bm1688" || $runtime_info_target == "cv84x6" ]]; then
+			# CV84X6 的 tpu memory-region 有 3 个 phandle（npu/vpp/scaler_shm），
+			# 前两个分别是 npu 与 vpp，第三个 scaler_shm 忽略
 			memory_phandle['npu']=${bmtpu_mem[0]}
 			memory_phandle['vpp']=${bmtpu_mem[1]}
 		fi
@@ -631,7 +658,7 @@ if [[ $print_info -eq 1 ]]; then
 			else
 				print_info_data="0x0"
 			fi
-		elif [[ $runtime_info_target == "bm1688" ]]; then
+		elif [[ $runtime_info_target == "bm1688" || $runtime_info_target == "cv84x6" ]]; then
 			sudo cat /sys/kernel/debug/ion/cvi_${key}_heap_dump/total_mem &> /dev/null
 			if [ "$?" == "0" ];then
 				print_info_data=$(printf "0x%x" $(($(sudo cat /sys/kernel/debug/ion/cvi_${key}_heap_dump/total_mem 2> /dev/null))))
@@ -683,7 +710,7 @@ fi
 if [ $((${user_mem_size["npu"]} + npu_size_add)) -gt $ddr1_size ] && [[ $runtime_info_target == "bm1684" ]]; then 
 	echo "Error: npu size ${user_mem_size["npu"]} error" | tee -a $log_file_path
 	exit -1
-elif [ $((${user_mem_size["npu"]} + npu_size_add)) -gt $ddr_size ] && [[ $runtime_info_target == "bm1688" ]]; then
+elif [ $((${user_mem_size["npu"]} + npu_size_add)) -gt $ddr_size ] && [[ $runtime_info_target == "bm1688" || $runtime_info_target == "cv84x6" ]]; then
 	echo "Error: npu size ${user_mem_size["npu"]} error" | tee -a $log_file_path
 	exit -1
 fi
@@ -707,11 +734,22 @@ if [[ $runtime_info_target == "bm1684" ]]; then
 		exit -1
 	fi
 elif [[ $runtime_info_target == "bm1688" ]]; then
-	if [ $((${user_mem_size["vpp"]} + vpp_size_add)) -gt $size_4g ]; then 
+	if [ $((${user_mem_size["vpp"]} + vpp_size_add)) -gt $size_4g ]; then
 		echo "Error: vpp size ${user_mem_size["vpp"]} error" | tee -a $log_file_path
 		exit -1
 	fi
-	if [[ $((${user_mem_size["vpp"]} + $vpp_size_add + $npu_size_add + ${user_mem_size["npu"]})) -gt $(($ddr_size)) ]]; then 
+	if [[ $((${user_mem_size["vpp"]} + $vpp_size_add + $npu_size_add + ${user_mem_size["npu"]})) -gt $(($ddr_size)) ]]; then
+		echo "Error: vpp+npu size ${user_mem_size["vpp"]}+${user_mem_size["npu"]} error" | tee -a $log_file_path
+		exit -1
+	fi
+elif [[ $runtime_info_target == "cv84x6" ]]; then
+	# MYSWY 决策：cv84x6 的 vpp 校验上限取 8GB（非 bm1688 的 4G）
+	vpp_max_size=$((size_4g * 2))
+	if [ $((${user_mem_size["vpp"]} + vpp_size_add)) -gt $vpp_max_size ]; then
+		echo "Error: vpp size ${user_mem_size["vpp"]} error" | tee -a $log_file_path
+		exit -1
+	fi
+	if [[ $((${user_mem_size["vpp"]} + $vpp_size_add + $npu_size_add + ${user_mem_size["npu"]})) -gt $(($ddr_size)) ]]; then
 		echo "Error: vpp+npu size ${user_mem_size["vpp"]}+${user_mem_size["npu"]} error" | tee -a $log_file_path
 		exit -1
 	fi
@@ -736,7 +774,7 @@ if [[ $runtime_info_target == "bm1684" ]]; then
 		};
 	};" >> "$file_path.new"
 	cp "$file_path.new" "$file_path"
-elif [[ $runtime_info_target == "bm1688" ]]; then
+elif [[ $runtime_info_target == "bm1688" || $runtime_info_target == "cv84x6" ]]; then
 	del_text "	cvitek-ion" "	}" "$file_path" >> $log_file_path
 	echo "/ {
 	cvitek-ion {
@@ -764,11 +802,15 @@ for key in "${user_mem[@]}"; do
 	hex_result=$(printf "0x%x" "$result")
 	if [[ $key == "npu" ]]; then hex_result=$(printf "0x%x" ${npu_size_add}); fi
 	# BM1684(X)的VPU最高1M空间需要预留
-	if [[ $key == "vpu" ]] && [[ $runtime_info_target == "bm1684" ]]; then 
-		hex_result=$(($hex_result - $size_1m)); 
+	if [[ $key == "vpu" ]] && [[ $runtime_info_target == "bm1684" ]]; then
+		hex_result=$(($hex_result - $size_1m));
 	fi
-	if [[ $key == "vpp" ]] && [[ $runtime_info_target == "bm1684" ]] && [[ $need_del_vpu -eq 1 ]] && [[ $need_del_vpp -eq 0 ]]; then 
-		hex_result=$(($hex_result - $size_1m)); 
+	if [[ $key == "vpp" ]] && [[ $runtime_info_target == "bm1684" ]] && [[ $need_del_vpu -eq 1 ]] && [[ $need_del_vpp -eq 0 ]]; then
+		hex_result=$(($hex_result - $size_1m));
+	fi
+	# CV84X6 的 vpp 顶对齐需避开顶部 FREERTOS 预留（vpp_size_add=2MB）
+	if [[ $key == "vpp" ]] && [[ $runtime_info_target == "cv84x6" ]] && [[ $need_del_vpp -eq 0 ]]; then
+		hex_result=$(($hex_result - $vpp_size_add))
 	fi
 	ion_mem_start["$key"]=${hex_result}
 	ion_mem_end["$key"]=$((${ion_mem_start["$key"]} + ${user_mem_size[$key]} - 1))
@@ -840,7 +882,7 @@ if [[ $runtime_info_target == "bm1684" ]]; then
 		echo "Error: check edit size fail" | tee -a $log_file_path
 		exit -1
 	fi
-elif [[ $runtime_info_target == "bm1688" ]]; then
+elif [[ $runtime_info_target == "bm1688" || $runtime_info_target == "cv84x6" ]]; then
 	if [[ $check_ion_npu_mem -eq ${user_mem_size['npu']} ]] && [[ $check_ion_vpp_mem -eq ${user_mem_size['vpp']} ]]; then
 		echo "Info: check edit size ok" | tee -a $log_file_path
 	else
