@@ -108,13 +108,17 @@ setup_mingw_headers() {
 # ---- linux 端: AppImage ----
 build_linux() {
   prepare_memory_edit_tarxz
-  # linux_release.sh 工作目录：产物与中间文件只写这里，不污染源码树
-  local work="${OUTPUT_DIR:-${SRC_DIR}/.build}"
+  # linux_release.sh 工作目录：独立 .build-linux 子目录，OUTPUT_DIR 根只放最终 AppImage
+  local work="${OUTPUT_DIR:-${SRC_DIR}/.build}/.build-linux"
   mkdir -p "${work}"
   if [[ "${INPLACE}" = "1" ]]; then
     echo "==> (inplace) 构建 ${PROJECT} linux AppImage ..."
     (cd "${SRC_DIR}" && bash linux_release.sh "${work}" "${VERSION}")
     echo "==> linux AppImage 完成"
+    # 收拢最终 AppImage 到 OUTPUT_DIR 根，清理中间产物
+    local out_root="${work%/.build-linux}"
+    find "${work}" -maxdepth 1 -name '*.AppImage' -exec cp -f {} "${out_root}"/ \;
+    rm -rf "${work}" 2>/dev/null || sudo rm -rf "${work}" 2>/dev/null || true
     return 0
   fi
   echo "==> 构建 ${PROJECT} linux AppImage (镜像 ${PQT_IMAGE})..."
@@ -137,6 +141,10 @@ build_linux() {
       bash linux_release.sh /pqt-output ${VERSION}
     " 2>&1 | tail -20
   echo "==> linux AppImage 完成"
+  # 收拢最终 AppImage 到 OUTPUT_DIR 根，清理中间产物
+  local out_root="${work%/.build-linux}"
+  find "${work}" -maxdepth 1 -name '*.AppImage' -exec cp -f {} "${out_root}"/ \;
+  rm -rf "${work}" 2>/dev/null || sudo rm -rf "${work}" 2>/dev/null || true
 }
 
 # ---- windows 端: exe (需 Qt mingw 交叉编译环境) ----
@@ -157,13 +165,14 @@ build_windows() {
     }
   fi
 
+  # 独立构建子目录（.build-win）：OUTPUT_DIR 根只放最终产物，中间产物（cmake 生成物）全部在此，构建后清理
+  local wdir="${OUTPUT_DIR:-${SRC_DIR}/build-win}/.build-win"
+  mkdir -p "${wdir}"
+
   if [[ "${INPLACE}" = "1" ]]; then
     # 直接在统一镜像内执行(工具链已内置, 当前 shell 内函数可直接使用)
     setup_mingw_posix
     setup_mingw_headers
-    # out-of-source: 构建目录放 OUTPUT_DIR（未传则退回源码树 build-win），不污染源码树
-    local wdir="${OUTPUT_DIR:-${SRC_DIR}/build-win}"
-    mkdir -p "${wdir}"
     cd "${wdir}"
     export QT_PLATFORM_DIR="${qt_prefix}"
     export QT_GCC_PLATFORM_DIR=/opt/mingw-posix/bin
@@ -185,16 +194,21 @@ TOOL
     make install
     echo "==> windows exe 产物:"
     find . -maxdepth 3 -name '*.exe' | head -5
+    # 收拢最终 exe 到 OUTPUT_DIR 根，清理构建中间产物
+    local out_root="${wdir%/.build-win}"
+    find . -maxdepth 3 -name '*.exe' -exec cp -f {} "${out_root}"/ \;
+    rm -rf "${wdir}" 2>/dev/null || sudo rm -rf "${wdir}" 2>/dev/null || true
     return 0
   fi
 
-  # 宿主模式: 在 sophon-tools-build 镜像内交叉编译（out-of-source: 构建目录为 OUTPUT_DIR）
+  # 宿主模式: 在 sophon-tools-build 镜像内交叉编译（out-of-source: 构建目录为 .build-win 子目录）
   local image="${IMAGE:-sophon-tools-build:unified}"
-  local wdir="${OUTPUT_DIR:-${SRC_DIR}/build-win}"
-  mkdir -p "${wdir}"
+  local out_root="${wdir%/.build-win}"
+  mkdir -p "${out_root}"
   docker run --rm \
     -v "${SRC_DIR}":/workspace/src \
     -v "${wdir}":/pqt-win-output \
+    -v "${out_root}":/pqt-out-root \
     -v "${qt_prefix}":/opt/qt-mingw \
     -e PQT_WIN_OUT="/pqt-win-output" \
     -e PQT_VERSION="${VERSION}" \
@@ -238,7 +252,13 @@ TOOL
       make install
       echo "==> windows exe 产物:"
       find . -maxdepth 3 -name '*.exe' | head -5
+      # 收拢最终 exe 到输出根目录（挂载的 /pqt-out-root = OUTPUT_DIR），构建中间产物留在 .build-win
+      mkdir -p /pqt-out-root
+      find . -maxdepth 3 -name '*.exe' -exec cp -f {} /pqt-out-root/ \;
     '
+
+  # 构建中间产物（.build-win）留在宿主 wdir，构建完成后清理
+  rm -rf "${wdir}" 2>/dev/null || sudo rm -rf "${wdir}" 2>/dev/null || true
 }
 
 case "${MODE}" in
