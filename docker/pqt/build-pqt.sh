@@ -194,9 +194,10 @@ TOOL
     make install
     echo "==> windows exe 产物:"
     find . -maxdepth 3 -name '*.exe' | head -5
-    # 收拢最终 exe 到 OUTPUT_DIR 根，清理构建中间产物
+    # 收拢最终 exe 到 OUTPUT_DIR 根，清理构建中间产物（先 cd 出去再删，避免删除当前工作目录）
     local out_root="${wdir%/.build-win}"
     find . -maxdepth 3 -name '*.exe' -exec cp -f {} "${out_root}"/ \;
+    cd "${out_root}"
     rm -rf "${wdir}" 2>/dev/null || sudo rm -rf "${wdir}" 2>/dev/null || true
     return 0
   fi

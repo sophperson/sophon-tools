@@ -65,8 +65,9 @@ build_windows() {
   exe="${exe:-$(find "$OUTPUT_DIR" "$SCRIPT_DIR" -maxdepth 3 -name '*.exe' 2>/dev/null | grep -v 'libs/' | head -1)}"
   if [ -n "$exe" ]; then
     # build-pqt.sh 已把 exe 收拢到 OUTPUT_DIR 根；仅当不在 OUTPUT_DIR 时才拷贝（避免 cp: same file）
-    if [ "$exe" != "$OUTPUT_DIR/$(basename "$exe")" ]; then
-      cp "$exe" "$OUTPUT_DIR/"
+    local out_dir="${OUTPUT_DIR%/}"
+    if [ "$exe" != "$out_dir/$(basename "$exe")" ]; then
+      cp "$exe" "$out_dir/"
     fi
     file "$exe" | head -1
   else
