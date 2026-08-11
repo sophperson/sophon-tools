@@ -113,6 +113,35 @@ func TestTPUMemMissing(t *testing.T) {
 	}
 }
 
+// TestTPUMemCv84x6 CV84X2 的 ion heap 前缀为 cvi_（cvi_npu_heap_dump/total_mem），
+// 而非 bm_ 前缀。值 4141875200 B = 3950 MiB。
+func TestTPUMemCv84x6(t *testing.T) {
+	fr := &fakeFileReader{files: map[string]string{
+		"/proc/cpuinfo": "model name	: cv84x6\n",
+		"/sys/kernel/debug/ion/cvi_npu_heap_dump/total_mem": "4141875200\n",
+	}}
+	c := NewCollector(fr, nil)
+	got := c.TPUMem()
+	want := 3950.0
+	if got != want {
+		t.Errorf("TPUMem() = %v, want %v", got, want)
+	}
+}
+
+// TestTPUMemCv84x6BmPathAbsent CV84X2 上 bm_ 前缀路径不存在时仍应正确降级返 0，
+// 而非因误读 bm_ 路径得到异常值。
+func TestTPUMemCv84x6BmPathAbsent(t *testing.T) {
+	fr := &fakeFileReader{files: map[string]string{
+		"/proc/cpuinfo": "model name	: cv84x6\n",
+		// 仅提供 cvi_ 路径，bm_ 路径缺失
+		"/sys/kernel/debug/ion/cvi_npu_heap_dump/total_mem": "0\n",
+	}}
+	c := NewCollector(fr, nil)
+	if got := c.TPUMem(); got != 0 {
+		t.Errorf("TPUMem() = %v, want 0 when cvi total_mem is 0", got)
+	}
+}
+
 // ---------------------------------------------------------------
 // TPUAverageUsage — avusage: 字段
 // ---------------------------------------------------------------

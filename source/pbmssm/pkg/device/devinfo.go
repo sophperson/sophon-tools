@@ -125,13 +125,19 @@ func LoadFromOEM(path string) {
 // readSnFromRaw 按 CPU 型号从原始设备路径读 SN，覆盖 OEMconfig 解析值（仅成功覆盖）。
 // 与 get_info.sh 的 SN 分支一致：
 //
-//	bm1688/cv186ah → /dev/mmcblk0boot1 offset 0/32
+//	bm1688/cv186ah/cv84x6 → /dev/mmcblk0boot1 offset 0/32
 //	bm1684x/bm1684 → nvmem offset 0/512
 func readSnFromRaw() {
-	cm := ReadCpuModel(CpuInfoPath)
+	readSnFromRawWithPaths(CpuInfoPath, Mmcblk0Boot1Path, NvmemSnPath)
+}
+
+// readSnFromRawWithPaths 接受注入路径的 readSnFromRaw 实现（测试用）。
+// CV84X2 与 bm1688 布局一致，SN 从 mmcblk0boot1 读取。
+func readSnFromRawWithPaths(cpuinfo, boot1, nvmem string) {
+	cm := ReadCpuModel(cpuinfo)
 	switch {
-	case cm == "bm1688" || cm == "cv186ah":
-		if chip, dev := readSnFromMmcblkBoot1(Mmcblk0Boot1Path); chip != "" || dev != "" {
+	case cm == "bm1688" || cm == "cv186ah" || cm == "cv84x6":
+		if chip, dev := readSnFromMmcblkBoot1(boot1); chip != "" || dev != "" {
 			if chip != "" {
 				ChipSn = chip
 			}
@@ -140,7 +146,7 @@ func readSnFromRaw() {
 			}
 		}
 	case cm == "bm1684x" || cm == "bm1684":
-		if chip, dev := readSnFromNvmem(NvmemSnPath); chip != "" || dev != "" {
+		if chip, dev := readSnFromNvmem(nvmem); chip != "" || dev != "" {
 			if chip != "" {
 				ChipSn = chip
 			}

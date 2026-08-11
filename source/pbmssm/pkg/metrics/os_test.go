@@ -194,6 +194,28 @@ func TestSdkVersionSOC186ah(t *testing.T) {
 
 // TestSdkVersionSOC1688NewFormat 锁定新格式 bm_version 首行 "SophonSDK(BM1688) 2.1"。
 // SE9 实测 bm_version 输出此格式（无 Gemini_SDK 行），SDK 版本取 ')' 之后的 "2.1"。
+// TestSdkVersionSOCCv84x6 覆盖 CV84X2（cv84x6）芯片：model name 识别为 cv84x6 时
+// 走 bm1688/cv186ah 同款 SophonSDK 首行解析（"SophonSDK(cv84x6) 2.1" → "2.1"）。
+func TestSdkVersionSOCCv84x6(t *testing.T) {
+	fr := &fakeFileReader{files: map[string]string{
+		"/proc/cpuinfo": "model name : cv84x6\n",
+	}}
+	cmd := &fakeCmdRunner{responses: map[string]cmdResp{
+		"uname": {"5.10.5\n", nil},
+		"/usr/sbin/bm_version": {
+			"SophonSDK(cv84x6) 2.1\n" +
+				"sophon-soc-libsophon : 0.4.13\n",
+			nil,
+		},
+	}}
+	c := NewCollector(fr, cmd)
+	got := c.SdkVersion()
+	want := "2.1"
+	if got != want {
+		t.Errorf("SdkVersion() cv84x6 = %q, want %q", got, want)
+	}
+}
+
 func TestSdkVersionSOC1688NewFormat(t *testing.T) {
 	fr := &fakeFileReader{files: map[string]string{
 		"/proc/cpuinfo": "model name : bm1688\n",

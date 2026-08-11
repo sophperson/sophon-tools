@@ -26,6 +26,42 @@ func TestChipTypeBM1688(t *testing.T) {
 	}
 }
 
+func TestChipTypeCv84x6(t *testing.T) {
+	fr := &fakeFileReader{files: map[string]string{
+		"/proc/cpuinfo": "model name	: cv84x6\n",
+	}}
+	c := NewCollector(fr, nil)
+	if got := c.ChipType(); got != "cv84x6" {
+		t.Errorf("ChipType() = %q, want cv84x6", got)
+	}
+}
+
+func TestChipTypeCv84x6Uppercase(t *testing.T) {
+	fr := &fakeFileReader{files: map[string]string{
+		"/proc/cpuinfo": "model name	: CV84X6\n",
+	}}
+	c := NewCollector(fr, nil)
+	if got := c.ChipType(); got != "cv84x6" {
+		t.Errorf("ChipType() = %q, want cv84x6 (case-insensitive)", got)
+	}
+}
+
+func TestChipFamily(t *testing.T) {
+	cases := []struct{ chip, want string }{
+		{"bm1684x", "bm1684"},
+		{"bm1684", "bm1684"},
+		{"bm1688", "cv"},
+		{"cv186ah", "cv"},
+		{"cv84x6", "cv"},
+		{"", ""},
+	}
+	for _, tt := range cases {
+		if got := chipFamily(tt.chip); got != tt.want {
+			t.Errorf("chipFamily(%q) = %q, want %q", tt.chip, got, tt.want)
+		}
+	}
+}
+
 func TestChipTypeUnknown(t *testing.T) {
 	fr := &fakeFileReader{files: map[string]string{
 		"/proc/cpuinfo": "model name	: Intel(R) Xeon(R)\n",
@@ -77,6 +113,28 @@ func TestVppMemoryBM1688(t *testing.T) {
 	total, used := c.VppMemory("bm1688")
 	if total != 419430400 || used != 209715200 {
 		t.Errorf("VppMemory() = (%d, %d), want (419430400, 209715200)", total, used)
+	}
+}
+
+func TestVppMemoryCv84x6(t *testing.T) {
+	fr := &fakeFileReader{files: map[string]string{
+		"/sys/kernel/debug/ion/cvi_vpp_heap_dump/summary": realDeviceIonSummary("[1]", "vpp", 419430400, 209715200),
+	}}
+	c := NewCollector(fr, nil)
+	total, used := c.VppMemory("cv84x6")
+	if total != 419430400 || used != 209715200 {
+		t.Errorf("VppMemory() = (%d, %d), want (419430400, 209715200)", total, used)
+	}
+}
+
+func TestTpuMemoryCv84x6(t *testing.T) {
+	fr := &fakeFileReader{files: map[string]string{
+		"/sys/kernel/debug/ion/cvi_npu_heap_dump/summary": realDeviceIonSummary("[0]", "npu", 4141875200, 2070937600),
+	}}
+	c := NewCollector(fr, nil)
+	total, used := c.TpuMemory("cv84x6")
+	if total != 4141875200 || used != 2070937600 {
+		t.Errorf("TpuMemory() = (%d, %d), want (4141875200, 2070937600)", total, used)
 	}
 }
 
@@ -226,5 +284,30 @@ func TestMemoryLayoutBM1688(t *testing.T) {
 	}
 	if lay.VPU.TotalMB != 0 || lay.VPU.UsedMB != 0 || lay.VPU.UsagePct != 0 {
 		t.Errorf("VPU = %+v, want all 0 on BM1688", lay.VPU)
+	}
+}
+
+// TestMemoryLayoutCv84x6 CV84X2 内存布局：cvi_ ion heap + chipType 识别为 cv84x6。
+func TestMemoryLayoutCv84x6(t *testing.T) {
+	fr := &fakeFileReader{files: map[string]string{
+		"/proc/cpuinfo": "model name\t: cv84x6\n",
+		"/proc/meminfo": "MemTotal:       4096000 kB\nMemFree:        2048000 kB\nMemAvailable:   3000000 kB\n",
+		"/sys/kernel/debug/ion/cvi_npu_heap_dump/summary": realDeviceIonSummary("[0]", "npu", 1610612736, 0),
+		"/sys/kernel/debug/ion/cvi_vpp_heap_dump/summary": realDeviceIonSummary("[1]", "vpp", 4290772992, 0),
+	}}
+	c := NewCollector(fr, nil)
+	lay := c.MemoryLayout()
+
+	if lay.ChipType != "cv84x6" {
+		t.Fatalf("ChipType = %q, want cv84x6", lay.ChipType)
+	}
+	if !approxEqual(lay.TPU.TotalMB, 1536, 0.01) {
+		t.Errorf("TPU.TotalMB = %v, want 1536", lay.TPU.TotalMB)
+	}
+	if !approxEqual(lay.VPP.TotalMB, 4092, 0.5) {
+		t.Errorf("VPP.TotalMB = %v, want ~4092", lay.VPP.TotalMB)
+	}
+	if lay.VPU.TotalMB != 0 || lay.VPU.UsedMB != 0 || lay.VPU.UsagePct != 0 {
+		t.Errorf("VPU = %+v, want all 0 on CV84X2", lay.VPU)
 	}
 }

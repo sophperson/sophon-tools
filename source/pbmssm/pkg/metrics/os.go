@@ -89,6 +89,7 @@ var socModels = map[string]bool{
 	"bm1684":  true,
 	"bm1688":  true,
 	"cv186ah": true,
+	"cv84x6":  true, // CV84X2
 }
 
 // SdkVersion 获取 SophonSDK 版本（对齐 pget_info get_info.sh 的决策树）。
@@ -118,7 +119,7 @@ func (c *Collector) SdkVersion() string {
 			} else if strings.HasPrefix(kernel, "4.9.") {
 				return c.buildInfoVersion()
 			}
-		case "bm1688", "cv186ah":
+		case "bm1688", "cv186ah", "cv84x6":
 			// 新格式 "SophonSDK(BM1688) 2.1" 优先；旧格式 "Gemini_SDK: x.y" 次之；
 			// 都缺失（如老固件无 bm_version 或输出异常）→ 回退 LIBSOPHON_VERSION
 			if v := c.bmVersionSophonSDK(); v != "" {
