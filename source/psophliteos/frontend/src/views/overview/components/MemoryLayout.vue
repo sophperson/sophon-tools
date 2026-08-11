@@ -34,7 +34,9 @@
 
   const props = defineProps<{ layout: MemoryLayout | null | undefined }>();
 
-  const isVPSS = (chip: string) => chip === 'bm1688' || chip === 'cv186ah';
+  // CV 家族（bm1688/cv186ah/cv84x6）的 VPP 分区实际对应 VPSS，用"VPSS内存"标签贴合硬件命名
+  const isVPSS = (chip: string) =>
+    ['bm1688', 'cv186ah', 'cv84x6'].includes(chip);
 
   const regions = computed(() => {
     const lay = props.layout;

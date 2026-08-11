@@ -267,10 +267,15 @@
     return result;
   });
   const computePower = computed(() => {
-    const computingPowerList = {
+    const computingPowerList: Record<string, string> = {
       SE6: 'INT8 17.6TOPS',
       SE8: 'INT8 32.0TOPS',
     };
+    // 未知型号从 chip[0].calculationCapacityInt8 动态取，避免 undefined
+    const chip0 = originData.value?.coreComputingUnit?.board?.[0]?.chip?.[0];
+    if (chip0?.calculationCapacityInt8) {
+      return `INT8 ${chip0.calculationCapacityInt8}TOPS`;
+    }
     return computingPowerList[deviceInfo.value.deviceType];
   });
   const { width } = useWindowSize();
