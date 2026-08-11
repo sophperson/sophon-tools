@@ -97,6 +97,7 @@ func Routers() *gin.Engine {
 		systemRouter.InitVersionRouter(LocalGroup)
 		systemRouter.InitUpgradeRouter(LocalGroup)
 		systemRouter.InitMetricsSelRouter(LocalGroup)
+		systemRouter.InitAiAgentRouter(LocalGroup)
 	}
 
 	logger.Info("Router Init Ok")

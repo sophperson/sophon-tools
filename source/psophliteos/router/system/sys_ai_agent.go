@@ -1,0 +1,25 @@
+package system
+
+import (
+	v1 "sophliteos/api/v1"
+	"sophliteos/global"
+	"sophliteos/middleware"
+
+	"github.com/gin-gonic/gin"
+)
+
+type AiAgentRouter struct{}
+
+// InitAiAgentRouter 注册 AI Agent 本地端点（不经 bmssm 反代）。
+// LLM/VLM 配置由 bmssm 的 /api/v1/llm-proxy/config 管理（经 /api/v1/* 反代），
+// 此处仅保留 picoclaw 端口探测、本地模型样例与页面转发。
+func (s *AiAgentRouter) InitAiAgentRouter(Router *gin.RouterGroup) (R gin.IRoutes) {
+	agentRouter := Router.Group("api/device/ai-agent", middleware.TimeoutMiddleware(global.TimeOut))
+	api := v1.ApiGroupApp.SystemApiGroup.AiAgentApi
+	{
+		agentRouter.GET("port", api.Port)
+		// picoclaw web 反代（iframe 同源访问）
+		agentRouter.Any("proxy/*any", api.Proxy)
+	}
+	return agentRouter
+}

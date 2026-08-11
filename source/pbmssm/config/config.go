@@ -89,6 +89,12 @@ func LoadFromDir(dir string) bool {
 	v.SetDefault("metrics.archive.maxSizeMB", 100)
 	v.SetDefault("metrics.archive.channelBufferSize", 16)
 
+	// LLM API 转发（OpenAI 兼容）：独立 HTTP server，仅绑定本机。
+	// port 默认 18080；listenIP 默认 127.0.0.1（仅本机可访问）。
+	v.SetDefault("llm-proxy.enabled", true)
+	v.SetDefault("llm-proxy.port", 18080)
+	v.SetDefault("llm-proxy.listenIP", "127.0.0.1")
+
 	v.AddConfigPath(dir)
 	v.SetConfigName("bmssm")
 	v.SetConfigType("yaml")

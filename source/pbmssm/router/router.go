@@ -16,6 +16,7 @@ import (
 	"bmssm/mvc/hardware"
 	"bmssm/mvc/health"
 	"bmssm/mvc/logs"
+	llmproxyCtrl "bmssm/mvc/llmproxy"
 	metricsCtrl "bmssm/mvc/metrics"
 	"bmssm/mvc/network"
 	portsCtrl "bmssm/mvc/ports"
@@ -49,6 +50,7 @@ func Register(r *gin.Engine) {
 	systemdC := systemdCtrl.DefaultController()
 	portsC := portsCtrl.DefaultController()
 	fwCtrl := firewallCtrl.DefaultController()
+	llmproxyCtrl := llmproxyCtrl.DefaultController()
 
 	// 公开：仅 login（含独立防爆破限流，约 5 次/12s/IP）
 	public := r.Group("/api/v1")
@@ -108,6 +110,11 @@ func Register(r *gin.Engine) {
 		// 端口状态
 		api.GET("/ports/listening", portsC.Listening)
 
+		// LLM 转发配置（读）
+		api.GET("/llm-proxy/config", llmproxyCtrl.GetConfig)
+		// 模型列表（从供应商拉取，供前端弹窗选择）
+		api.GET("/llm-proxy/models", llmproxyCtrl.ListModels)
+
 		// Docker
 		api.GET("/docker/container", dockerCtrl.ListContainers)
 		api.GET("/docker/image", dockerCtrl.ListImages)
@@ -156,6 +163,12 @@ func Register(r *gin.Engine) {
 		admin.POST("/docker/container/:name/stop", dockerCtrl.StopContainer)
 		admin.DELETE("/docker/container/:name", dockerCtrl.RemoveContainer)
 		admin.DELETE("/docker/image/:id", dockerCtrl.RemoveImage)
+
+		// LLM 转发配置（写）
+		admin.PUT("/llm-proxy/config", llmproxyCtrl.SaveConfig)
+		admin.POST("/llm-proxy/forward-key/reset", llmproxyCtrl.ResetForwardKey)
+		admin.POST("/llm-proxy/forward-key/write-picoclaw", llmproxyCtrl.WriteForwardKey)
+		admin.POST("/llm-proxy/test", llmproxyCtrl.RunTest)
 
 		// 软件/OTA（写）
 		admin.POST("/software/install", softwareCtrl.Install)

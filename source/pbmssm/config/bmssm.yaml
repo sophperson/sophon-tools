@@ -42,3 +42,11 @@ firewall:
 software:
   autoRunScript: false   # 默认 false：禁止自动执行包内脚本（tar.gz/zip 的 install.sh、
                          # .deb 的 dpkg 维护脚本），防上传即 root RCE；需安装软件时置 true
+
+# LLM API 转发（OpenAI 兼容）：独立 HTTP server，仅绑定本机。
+# 客户端以 model=devproxy 请求，转发时替换为配置的目标模型名。
+# 上游 api_base/key/目标模型由 /api/v1/llm-proxy/config 接口管理（sqlite 持久化）。
+llm-proxy:
+  enabled: true          # 总开关
+  port: 18080            # 转发 server 端口（默认）
+  listenIP: 127.0.0.1    # 仅本机可访问
