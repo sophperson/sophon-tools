@@ -5,4 +5,5 @@ type RouterGroup struct {
 	VersionRouter
 	UpgradeRouter
 	MetricsSelRouter
+	AiAgentRouter
 }

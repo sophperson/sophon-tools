@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"bmssm/config"
 	"bmssm/global"
 )
 
@@ -54,5 +55,31 @@ func TestHealthz(t *testing.T) {
 	}
 	if body["uptime"] == "" {
 		t.Fatalf("uptime empty")
+	}
+}
+
+// TestLlmProxyRoutes 验证 llm-proxy 配置路由已注册：
+// 无 token 时 GET/PUT 均返回 401（Auth 中间件），而非 404。
+func TestLlmProxyRoutes(t *testing.T) {
+	gin.SetMode(gin.ReleaseMode)
+	// Auth 中间件读取 config.Conf；测试需先初始化（用默认值即可）
+	config.LoadFromDir(t.TempDir())
+	r := gin.New()
+	Register(r)
+
+	// GET 无 token → 401（路由存在且被 Auth 拦截）
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/llm-proxy/config", nil)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("GET config without token = %d, want 401", w.Code)
+	}
+
+	// PUT 无 token → 401
+	w2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodPut, "/api/v1/llm-proxy/config", nil)
+	r.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusUnauthorized {
+		t.Fatalf("PUT config without token = %d, want 401", w2.Code)
 	}
 }

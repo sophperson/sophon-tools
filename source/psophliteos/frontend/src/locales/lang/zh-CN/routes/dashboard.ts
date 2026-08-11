@@ -26,6 +26,9 @@ export default {
   serviceManage: '服务管理',
   portStatus: '端口状态',
   firewall: '防火墙',
+  aiAgent: 'AI Agent',
+  aiAgentApiConfig: 'Agent 配置',
+  aiAgentAgent: 'Agent',
   content: {
     sysContent: '系统OTA升级,适用于版本升级,不支持降级和跨版本升级,否则可能导致系统损坏。',
     ssmContent:

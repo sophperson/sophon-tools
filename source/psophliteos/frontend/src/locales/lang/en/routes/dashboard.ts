@@ -26,6 +26,9 @@ export default {
   serviceManage: 'Service Management',
   portStatus: 'Port Status',
   firewall: 'Firewall',
+  aiAgent: 'AI Agent',
+  aiAgentApiConfig: 'Agent Config',
+  aiAgentAgent: 'Agent',
   content: {
     sysContent:
       'System OTA upgrade, suitable for version upgrade, does not support downgrade and cross version upgrade, otherwise it may cause system damage.',

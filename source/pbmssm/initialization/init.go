@@ -9,6 +9,7 @@ import (
 	"bmssm/global"
 	"bmssm/logger"
 	mwalarm "bmssm/mvc/alarm"
+	"bmssm/mvc/llmproxy"
 	mwuser "bmssm/mvc/user"
 	"bmssm/pkg/alarm"
 	"bmssm/pkg/auth"
@@ -89,6 +90,11 @@ func InitBase() {
 		ChipType:  global.ModuleType,
 		BoardType: global.ModuleTypeEx,
 	})
+
+	// LLM API 转发 server：迁移旧表结构、读取已存配置启动（或禁用）。
+	// 配置保存接口会热更新。
+	llmproxy.Migrate(database.DB())
+	llmproxy.StartServer(llmproxy.NewService(database.DB()).LoadConfig())
 }
 
 // createDefaultAdmin 在 user 表为空时插入默认 admin 用户。
