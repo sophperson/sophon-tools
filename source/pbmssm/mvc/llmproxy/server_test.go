@@ -103,13 +103,23 @@ func TestServiceLoadWhenDBEmpty(t *testing.T) {
 	}
 }
 
-func TestForwardKeyAuth(t *testing.T) {
+// TestForwardKeyRelaxed 验证 MYS-171 放宽后的 key 策略：
+// 配置了 ForwardKey 时，无 key / 错误 key 均不再 401（放行到上游）。
+func TestForwardKeyRelaxed(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	svc := NewService(db)
+
+	// mock 上游，记录收到的请求并返回 200
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"x","object":"chat.completion","choices":[]}`))
+	}))
+	defer upstream.Close()
+
 	cfg, _ := svc.SaveConfig(SaveRequest{
-		LLMApiBase: "http://127.0.0.1:1/v1", LLMApiKey: "k", LLMModel: "m",
-		VLMApiBase: "http://127.0.0.1:1/v1", VLMApiKey: "k", VLMModel: "m",
+		LLMApiBase: upstream.URL + "/llm", LLMApiKey: "k", LLMModel: "m",
+		VLMApiBase: upstream.URL + "/vlm", VLMApiKey: "k", VLMModel: "m",
 	})
 	// 强制设一个已知转发 key
 	cfg.ForwardKey = "test-forward-key"
@@ -118,21 +128,178 @@ func TestForwardKeyAuth(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]interface{}{"model": "x", "messages": []interface{}{}})
 
-	// 无 key → 401
+	cases := []struct {
+		name string
+		auth string // "" 表示不带 Authorization 头
+		want int
+	}{
+		{"no key", "", http.StatusOK},
+		{"wrong key", "Bearer wrong-key", http.StatusOK},
+		{"matching key", "Bearer test-forward-key", http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+			if tc.auth != "" {
+				req.Header.Set("Authorization", tc.auth)
+			}
+			rec := httptest.NewRecorder()
+			handleChatCompletions(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d, body = %s", rec.Code, tc.want, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestForwardKeyUnset 验证未配置 ForwardKey 时同样放行（不要求鉴权）。
+func TestForwardKeyUnset(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	svc := NewService(db)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"x","object":"chat.completion","choices":[]}`))
+	}))
+	defer upstream.Close()
+
+	cfg, _ := svc.SaveConfig(SaveRequest{
+		LLMApiBase: upstream.URL + "/llm", LLMApiKey: "k", LLMModel: "m",
+		VLMApiBase: upstream.URL + "/vlm", VLMApiKey: "k", VLMModel: "m",
+	})
+	cfg.ForwardKey = ""
+	setActive(cfg)
+
+	body, _ := json.Marshal(map[string]interface{}{"model": "x", "messages": []interface{}{}})
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	handleChatCompletions(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("no key: status = %d, want 401", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (no forward key configured)", rec.Code)
+	}
+}
+
+// TestForwardModelPrecedence 验证 MYS-171 model 规则：
+// 请求带非空 model → 上游收到该 model；请求无 model → 上游收到默认 llm.ModelName。
+func TestForwardModelPrecedence(t *testing.T) {
+	var gotModels []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req map[string]interface{}
+		_ = json.Unmarshal(body, &req)
+		if m, _ := req["model"].(string); m != "" {
+			gotModels = append(gotModels, m)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"x","object":"chat.completion","choices":[]}`))
+	}))
+	defer upstream.Close()
+
+	db := setupTestDB(t)
+	defer db.Close()
+	svc := NewService(db)
+	cfg, _ := svc.SaveConfig(SaveRequest{
+		LLMApiBase: upstream.URL + "/llm", LLMApiKey: "k", LLMModel: "llm-default",
+		VLMApiBase: upstream.URL + "/vlm", VLMApiKey: "k", VLMModel: "vlm-target",
+	})
+	cfg.ForwardKey = "fk"
+	_ = svc.db.Model(&Config{}).Where("id = ?", 1).Update("forward_key", "fk").Error
+	setActive(svc.LoadConfig())
+
+	send := func(model interface{}) {
+		m := map[string]interface{}{
+			"messages": []map[string]interface{}{
+				{"role": "user", "content": "hi"},
+			},
+		}
+		if model != nil {
+			m["model"] = model
+		}
+		body, _ := json.Marshal(m)
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer fk")
+		rec := httptest.NewRecorder()
+		handleChatCompletions(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+		}
 	}
 
-	// 错误 key → 401
-	req = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer wrong-key")
-	rec = httptest.NewRecorder()
+	// 请求带 model=X → 上游收到 X
+	send("request-model-a")
+	if len(gotModels) != 1 || gotModels[0] != "request-model-a" {
+		t.Fatalf("with model: got = %v, want [request-model-a]", gotModels)
+	}
+
+	// 请求无 model → 默认 llm.ModelName
+	send(nil)
+	if len(gotModels) != 2 || gotModels[1] != "llm-default" {
+		t.Fatalf("without model: got = %v, want [request-model-a llm-default]", gotModels)
+	}
+
+	// 请求 model 为空串 → 默认 llm.ModelName
+	send("")
+	if len(gotModels) != 3 || gotModels[2] != "llm-default" {
+		t.Fatalf("empty model: got = %v, want [request-model-a llm-default llm-default]", gotModels)
+	}
+}
+
+// TestForwardModelKeptForImage 验证带图请求：model 保留请求值，图片仍走 VLM 描述化后整体路由 LLM。
+func TestForwardModelKeptForImage(t *testing.T) {
+	var gotLLMModel string
+	vlmCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req map[string]interface{}
+		_ = json.Unmarshal(body, &req)
+		if strings.HasPrefix(r.URL.Path, "/vlm") {
+			vlmCalls++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"一只猫在沙发上"}}]}`))
+			return
+		}
+		gotLLMModel, _ = req["model"].(string)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"x","object":"chat.completion","choices":[]}`))
+	}))
+	defer upstream.Close()
+
+	db := setupTestDB(t)
+	defer db.Close()
+	svc := NewService(db)
+	cfg, _ := svc.SaveConfig(SaveRequest{
+		LLMApiBase: upstream.URL + "/llm", LLMApiKey: "k", LLMModel: "llm-target",
+		VLMApiBase: upstream.URL + "/vlm", VLMApiKey: "k", VLMModel: "vlm-target",
+	})
+	cfg.ForwardKey = "fk"
+	_ = svc.db.Model(&Config{}).Where("id = ?", 1).Update("forward_key", "fk").Error
+	setActive(svc.LoadConfig())
+	globalImageCache = newImageCache(10 << 20)
+
+	imgData := []byte("fake-png-bytes-456")
+	b64 := base64.StdEncoding.EncodeToString(imgData)
+	body, _ := json.Marshal(map[string]interface{}{
+		"model": "my-custom-model",
+		"messages": []map[string]interface{}{
+			{"role": "user", "content": []map[string]interface{}{
+				{"type": "text", "text": "what is this"},
+				{"type": "image_url", "image_url": map[string]string{"url": "data:image/png;base64," + b64}},
+			}},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer fk")
+	rec := httptest.NewRecorder()
 	handleChatCompletions(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("wrong key: status = %d, want 401", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if vlmCalls != 1 {
+		t.Errorf("VLM should be called once, calls = %d", vlmCalls)
+	}
+	if gotLLMModel != "my-custom-model" {
+		t.Errorf("image request should keep request model, got = %q", gotLLMModel)
 	}
 }
 
@@ -185,8 +352,8 @@ func TestImageDescribeRouting(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("text: status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if gotLLMModel != "llm-target" {
-		t.Errorf("text routed model = %q, want llm-target", gotLLMModel)
+	if gotLLMModel != "devproxy" {
+		t.Errorf("text: request model should be kept (MYS-171), got %q, want devproxy", gotLLMModel)
 	}
 	if vlmCalls != 0 {
 		t.Errorf("text should not call VLM, calls = %d", vlmCalls)
@@ -211,9 +378,9 @@ func TestImageDescribeRouting(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("image: status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	// 整体走 LLM
-	if gotLLMModel != "llm-target" {
-		t.Errorf("image request should route to LLM, got model = %q", gotLLMModel)
+	// 整体走 LLM：请求 model 被保留（devproxy）
+	if gotLLMModel != "devproxy" {
+		t.Errorf("image request should keep request model, got = %q", gotLLMModel)
 	}
 	// VLM 被调用一次生成描述
 	if vlmCalls != 1 {
