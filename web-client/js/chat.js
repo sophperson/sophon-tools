@@ -119,7 +119,11 @@
     live: {},
     typingEl: null,
     sending: false,
-    pendingSendSessionId: null   // 最近一次发送消息的前端会话 id，用于正确绑定服务端 session_id
+    pendingSendSessionId: null,   // 最近一次发送消息的前端会话 id，用于正确绑定服务端 session_id
+    // 合并状态：一轮无用户打断的连续 text 归并到同一气泡（修复连续信息拆泡问题）。
+    // 服务端（agentproxy）可能把同一回复拆成多个 text message_id（如 text-1/text-2），
+    // 若逐条 create 会各建泡。用该状态把相邻 text create 累积到同一个气泡。
+    merge: null   // { id, el, content, model }
   };
   state.activeId = loadActiveId(state.sessions);
 
@@ -261,6 +265,9 @@
       appendToSession({ role: 'user', content: content, media: media || [], time: Date.now() });
     }
 
+    // 用户消息打断 AI text 流：之后到达的 text 应另起气泡，清除合并上下文
+    clearMerge();
+
     var wrap = document.createElement('div');
     wrap.className = 'msg msg-user';
 
@@ -289,6 +296,11 @@
   }
 
   // ---------- AI 消息渲染 ----------
+
+  /** 清除 AI text 合并上下文。会话切换/新建、用户发消息时调用。 */
+  function clearMerge() {
+    state.merge = null;
+  }
 
   /**
    * 处理 message.create：首次创建消息气泡。
@@ -320,13 +332,48 @@
       if (!model) model = state.settings.model || 'AI';
     }
 
+    // 合并策略：一段连续 assistant 输出可能被服务端拆成多个 text message_id
+    //（如 text-1/text-2，中间无用户消息）。这种情况下追加到上一个 text 气泡，
+    // 避免同一轮回复被拆进不同气泡。
+    if (kind === 'text' && state.merge && state.merge.el) {
+      var mergedContent = state.merge.content + content;
+      state.merge.content = mergedContent;
+      // 更新合并根气泡 DOM 内容
+      var mergedBubble = state.merge.el.querySelector('.msg-bubble');
+      if (mergedBubble) mergedBubble.innerHTML = renderMarkdown(mergedContent);
+      // 根条目 content 同步为合并后全量（后续 update 都在此累积）
+      var rootEntry = state.live[state.merge.id];
+      if (rootEntry) rootEntry.content = mergedContent;
+      // 新 message_id 也映射到同一根气泡，便于后续 update/create 命中
+      state.live[messageId] = {
+        el: state.merge.el,
+        content: mergedContent,
+        kind: 'text',
+        model: model,
+        messageIdKey: messageId,
+        sessionId: state.activeId,
+        mergeRootId: state.merge.id,   // 本条目是合并别名：指向根气泡
+        mergeAlias: true
+      };
+      // 同步与会话历史里该 assistant text 消息（累加）
+      mergePersistToSession(mergedContent, model);
+      scrollToBottom();
+      return;
+    }
+
     var el;
     if (kind === 'thought') {
       el = buildCollapse('思考过程', content);
+      // 折叠块（思考/工具）打断连续正文：其后新 text 另起一组
+      clearMerge();
     } else if (kind === 'tool_calls') {
       el = buildCollapse('工具调用', formatToolCalls(payload));
+      // 工具调用片段不应与正文合并
+      clearMerge();
     } else {
       el = buildTextMessage(content, model);
+      // 记录 text 气泡为后续合并目标（thought/tool_calls 不参与合并）
+      state.merge = { id: messageId, el: el, content: content, model: model };
     }
 
     state.live[messageId] = {
@@ -374,6 +421,23 @@
   }
 
   /**
+   * 合并 text 后把最新完整内容写回会话历史（合并到该 assistant 最近一条 text 消息）。
+   */
+  function mergePersistToSession(content, model) {
+    var s = getActiveSession();
+    if (!s) return;
+    for (var i = s.messages.length - 1; i >= 0; i--) {
+      var m = s.messages[i];
+      if (m.role === 'assistant' && (m.kind || 'text') === 'text') {
+        m.content = content;
+        if (model) m.model = model;
+        saveSessions();
+        return;
+      }
+    }
+  }
+
+  /**
    * 处理 message.update：更新同一 message_id 的气泡内容。
    * 兼容两种语义：
    *   - 全量扩展：update.content 是当前内容的前缀扩展 → 直接替换
@@ -381,14 +445,32 @@
    */
   function handleUpdate(payload) {
     var messageId = payload.message_id;
-    if (!messageId || !state.live[messageId]) {
+    var entry = messageId ? state.live[messageId] : null;
+
+    // 合并别名：同轮连续 text 归并到同一根气泡后，其余 message_id 的 update
+    // 也应对根气泡累积，避免只更新别名本条造成内容割裂。
+    if (entry && entry.mergeRootId && state.merge && state.merge.content !== undefined) {
+      var rootEntry = state.live[entry.mergeRootId];
+      if (rootEntry) {
+        var mNext = accumulate(state.merge.content, payload.content || '');
+        state.merge.content = mNext;
+        rootEntry.content = mNext;
+        updateBubbleContent(rootEntry.el, 'text', mNext, rootEntry.model);
+        persistAssistantUpdate(rootEntry, mNext);
+        scrollToBottom();
+        return;
+      }
+    }
+
+    if (!messageId || !entry) {
       // 未跟踪的 update：当作 create 兜底
       handleCreate(payload);
       return;
     }
-    var entry = state.live[messageId];
     var next = accumulate(entry.content, payload.content || '');
     entry.content = next;
+    // 若命中当前合并根气泡，同步合并累积值
+    if (state.merge && state.merge.id === messageId) state.merge.content = next;
     updateBubbleContent(entry.el, entry.kind, next, entry.model);
     // 同步持久化消息内容（流式 update 结束后刷新历史仍是最新内容）
     persistAssistantUpdate(entry, next);
@@ -866,6 +948,7 @@
     state.messagesEl.innerHTML = '';
     state.live = {};
     state.typingEl = null;
+    clearMerge();
 
     // 标题
     var titleEl = $('.chat-title');

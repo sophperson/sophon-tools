@@ -29,8 +29,8 @@ type ProcessManager struct {
 	onReady func() // 每次进程成功启动后被回调（acp client 重跑 initialize + 恢复会话）
 
 	mu      sync.Mutex
-	cmd     *exec.Cmd      // 当前进程（Wait goroutine 退出前有效）
-	waitCh  chan struct{}  // 当前进程退出信号（close 表示已退出）
+	cmd     *exec.Cmd     // 当前进程（Wait goroutine 退出前有效）
+	waitCh  chan struct{} // 当前进程退出信号（close 表示已退出）
 	state   ProcessState
 	started time.Time
 	stdin   io.WriteCloser // 写请求（NDJSON 行），写时需加 writeMu
@@ -356,6 +356,20 @@ func (pm *ProcessManager) ReadLine() ([]byte, error) {
 func (pm *ProcessManager) GracefulStop() {
 	pm.stopping.Store(true)
 	pm.stopProc(true)
+}
+
+// Stop 停止进程但不标记 stopping（之后再调用 Start 可重新拉起）。
+// 供服务管理接口「停止」用：不同于 GracefulStop（其置 stopping 后不可再起）。
+func (pm *ProcessManager) Stop() {
+	pm.stopProc(true)
+}
+
+// Restart 重启进程（stop + start）。供服务管理接口「重启」用。
+func (pm *ProcessManager) Restart() {
+	pm.mu.Lock()
+	pm.stopping.Store(false)
+	pm.mu.Unlock()
+	pm.restart()
 }
 
 // stopProc 停止当前进程并等待退出（不改变 stopping 状态，由调用方决定）。

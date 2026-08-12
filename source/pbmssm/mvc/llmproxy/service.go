@@ -77,17 +77,19 @@ func (s *Service) SaveConfig(req SaveRequest) (Config, error) {
 		return def
 	}
 	c := Config{
-		ID:         1,
-		LLMApiBase: nonEmpty(req.LLMApiBase, cur.LLMApiBase, "https://www.sophnet.com/api/open-apis/v1"),
-		LLMApiKey:  nonEmpty(req.LLMApiKey, cur.LLMApiKey, ""),
-		LLMModel:   nonEmpty(req.LLMModel, cur.LLMModel, "sophnet-deepseek"),
-		LLMEnabled: enabled(req.LLMEnabled, cur.LLMEnabled),
-		VLMApiBase: nonEmpty(req.VLMApiBase, cur.VLMApiBase, "https://www.sophnet.com/api/open-apis/v1"),
-		VLMApiKey:  nonEmpty(req.VLMApiKey, cur.VLMApiKey, ""),
-		VLMModel:   nonEmpty(req.VLMModel, cur.VLMModel, "sophnet-vl-flash"),
-		VLMEnabled: enabled(req.VLMEnabled, cur.VLMEnabled),
-		ForwardKey: cur.ForwardKey,
-		UpdatedAt:  time.Now(),
+		ID:          1,
+		LLMApiBase:  nonEmpty(req.LLMApiBase, cur.LLMApiBase, "https://www.sophnet.com/api/open-apis/v1"),
+		LLMApiKey:   nonEmpty(req.LLMApiKey, cur.LLMApiKey, ""),
+		LLMModel:    nonEmpty(req.LLMModel, cur.LLMModel, "sophnet-deepseek"),
+		LLMEnabled:  enabled(req.LLMEnabled, cur.LLMEnabled),
+		LLMOverride: enabled(req.LLMOverride, cur.LLMOverride),
+		VLMApiBase:  nonEmpty(req.VLMApiBase, cur.VLMApiBase, "https://www.sophnet.com/api/open-apis/v1"),
+		VLMApiKey:   nonEmpty(req.VLMApiKey, cur.VLMApiKey, ""),
+		VLMModel:    nonEmpty(req.VLMModel, cur.VLMModel, "sophnet-vl-flash"),
+		VLMEnabled:  enabled(req.VLMEnabled, cur.VLMEnabled),
+		VLMOverride: enabled(req.VLMOverride, cur.VLMOverride),
+		ForwardKey:  cur.ForwardKey,
+		UpdatedAt:   time.Now(),
 	}
 	if s == nil || s.db == nil {
 		return c, errors.New("database unavailable")
@@ -133,10 +135,12 @@ func (c Config) ToResponse(written bool) ConfigResponse {
 		LLMApiBase:      c.LLMApiBase,
 		LLMModel:        c.LLMModel,
 		LLMEnabled:      c.LLMEnabled,
+		LLMOverride:     c.LLMOverride,
 		LLMHasKey:       c.LLMApiKey != "",
 		VLMApiBase:      c.VLMApiBase,
 		VLMModel:        c.VLMModel,
 		VLMEnabled:      c.VLMEnabled,
+		VLMOverride:     c.VLMOverride,
 		VLMHasKey:       c.VLMApiKey != "",
 		ForwardKey:      c.ForwardKey,
 		ForwardKeyReady: written,

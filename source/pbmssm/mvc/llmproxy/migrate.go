@@ -25,10 +25,12 @@ func Migrate(db *gorm.DB) {
 		{"llm_api_key", "text"},
 		{"llm_model", "text"},
 		{"llm_enabled", "bool"},
+		{"llm_override_model", "bool"},
 		{"vlm_api_base", "text"},
 		{"vlm_api_key", "text"},
 		{"vlm_model", "text"},
 		{"vlm_enabled", "bool"},
+		{"vlm_override_model", "bool"},
 		{"forward_key", "text"},
 		{"forward_key_written", "bool"},
 	}
