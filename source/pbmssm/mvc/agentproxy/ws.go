@@ -319,6 +319,10 @@ func (c *conn) handleFrame(frame clientFrame) {
 		c.handleSessionSwitchLocked(frame)
 	case "session.delete":
 		c.handleSessionDeleteLocked(frame)
+	case "session.list":
+		c.handleSessionListLocked()
+	case "session.history":
+		c.handleSessionHistoryLocked(frame)
 	case "session.cancel":
 		c.handleSessionCancelLocked()
 	case "session.new":
@@ -458,6 +462,54 @@ func (c *conn) handleSessionSwitchLocked(frame clientFrame) {
 		return
 	}
 	c.enqueueErrorLocked("切换会话需重新连接", "switch_reconnect")
+}
+
+// handleSessionListLocked session.list：返回服务端全部会话摘要（不含全量消息）。
+// 前置：持 c.mu。
+func (c *conn) handleSessionListLocked() {
+	summaries := make([]map[string]any, 0, 16)
+	for _, s := range c.module.Sessions().List() {
+		summaries = append(summaries, map[string]any{
+			"id":           s.ID,
+			"title":        s.Title,
+			"acpSessionId": s.ACPSessionID,
+			"updatedAt":    s.UpdatedAt,
+			"messageCount": len(s.Messages),
+		})
+	}
+	f := WSFrame{Type: "session.list", Payload: map[string]any{"sessions": summaries}}
+	select {
+	case c.send <- []WSFrame{f}:
+	case <-c.done:
+	}
+}
+
+// handleSessionHistoryLocked session.history：返回指定 webchat 会话的全量消息。
+// 前置：持 c.mu。
+func (c *conn) handleSessionHistoryLocked(frame clientFrame) {
+	sid := frame.SessionID
+	if sid == "" {
+		if p, ok := frame.Payload["session_id"].(string); ok {
+			sid = p
+		}
+	}
+	if sid == "" {
+		return
+	}
+	s, ok := c.module.Sessions().Get(sid)
+	if !ok {
+		c.enqueueErrorLocked("会话不存在", "session_not_found")
+		return
+	}
+	f := WSFrame{
+		Type:      "session.history",
+		SessionID: sid,
+		Payload:   map[string]any{"session_id": sid, "messages": s.Messages},
+	}
+	select {
+	case c.send <- []WSFrame{f}:
+	case <-c.done:
+	}
 }
 
 // handleSessionDeleteLocked 删除会话。前置：持 c.mu。

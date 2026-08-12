@@ -401,6 +401,67 @@ func TestHubEventRouting(t *testing.T) {
 // TestWSMultiSession 多会话验证：
 //   - 同一连接连续发送两条消息 → 复用同一 ACP 会话（只创建一个 session/new）
 //   - 新连接发送 → 创建新的 ACP 会话（第二个 session/new）
+// sessionSummaries 从 session.list 帧提取摘要列表。
+func sessionSummaries(t *testing.T, conn *websocket.Conn) []map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		m := readFrame(t, conn)
+		if m["type"] != "session.list" {
+			continue
+		}
+		raw, ok := m["payload"].(map[string]any)["sessions"].([]any)
+		if !ok {
+			t.Fatalf("session.list payload.sessions not array: %v", m["payload"])
+		}
+		out := make([]map[string]any, 0, len(raw))
+		for _, item := range raw {
+			mm, ok := item.(map[string]any)
+			if !ok {
+				t.Fatalf("session.list item not object: %v", item)
+			}
+			out = append(out, mm)
+		}
+		return out
+	}
+	t.Fatal("no session.list frame received")
+	return nil
+}
+
+func TestWSSessionList(t *testing.T) {
+	mod, _ := mockModuleForWS(t)
+	h := newHub(mod, "key")
+	srv := httptest.NewServer(http.HandlerFunc(h.serveWS))
+	t.Cleanup(srv.Close)
+
+	// 预置两个服务端会话（直接写 SessionManager，不经过 ACP）
+	sm := mod.sessions
+	first := &WebchatSession{ID: "web-1", ACPSessionID: "acp-1", Title: "标题A", Messages: []ChatMessage{{Role: "user", Content: "hi"}}}
+	second := &WebchatSession{ID: "web-2", ACPSessionID: "acp-2", Title: "标题B", Messages: []ChatMessage{}}
+	sm.mu.Lock()
+	sm.sessions["web-1"] = first
+	sm.sessions["web-2"] = second
+	sm.mu.Unlock()
+
+	conn := dialWS(t, wsURL(srv.URL)+wsPath, "token.key")
+	_ = conn.WriteJSON(map[string]any{"type": "session.list"})
+
+	list := sessionSummaries(t, conn)
+	if len(list) != 2 {
+		t.Fatalf("session.list len = %d, want 2: %v", len(list), list)
+	}
+	found := map[string]bool{}
+	for _, s := range list {
+		found[s["id"].(string)] = true
+		if s["title"] == "标题A" && s["messageCount"].(float64) != 1 {
+			t.Errorf("标题A messageCount = %v, want 1", s["messageCount"])
+		}
+	}
+	if !found["web-1"] || !found["web-2"] {
+		t.Errorf("session.list missing ids: %v", list)
+	}
+}
+
 func TestWSMultiSession(t *testing.T) {
 	mod, tr := mockModuleForWS(t)
 	h := newHub(mod, "key")
