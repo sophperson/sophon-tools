@@ -7,14 +7,15 @@ func (c *Collector) MemoryLayout() MemoryLayout {
 	chip := c.ChipType()
 	sys := c.Memory()
 
-	// 系统"已用"= total - free（free 缺失时回退 available），对齐前端旧逻辑。
-	sysFree := sys.Free
-	if sysFree <= 0 {
-		sysFree = sys.Available
+	// 系统"已用"= total - available（buff/cache 可回收不计入真实占用）；
+	// available 缺失时回退 free。
+	sysAvail := sys.Available
+	if sysAvail <= 0 {
+		sysAvail = sys.Free
 	}
 	layout := MemoryLayout{
 		ChipType: chip,
-		System:   memRegionMBFloat(sys.Total, sys.Total-sysFree),
+		System:   memRegionMBFloat(sys.Total, sys.Total-sysAvail),
 	}
 	tpuT, tpuU := c.TpuMemory(chip)
 	layout.TPU = memRegionMB(tpuT, tpuU)

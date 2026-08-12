@@ -29,14 +29,20 @@ func (c *Collector) Memory() Memory {
 	return m
 }
 
-// MemoryUsagePercent 计算内存使用百分比 (0-100)，对齐 pget_info。
-// 使用率 = (total - free) / total * 100
+// MemoryUsagePercent 计算内存使用百分比 (0-100)。
+// 使用率 = (total - available) / total * 100，基于 MemAvailable：
+// buff/cache 部分可随时回收，不计入真实占用（否则常驻 90%+，无告警价值）。
+// 与告警 memUsage 口径一致；MemAvailable 缺失时退化为 MemFree。
 func (c *Collector) MemoryUsagePercent() float64 {
 	m := c.Memory()
 	if m.Total <= 0 {
 		return 0
 	}
-	return (m.Total - m.Free) / m.Total * 100.0
+	avail := m.Available
+	if avail <= 0 {
+		avail = m.Free
+	}
+	return (m.Total - avail) / m.Total * 100.0
 }
 
 // memLineMB 从形如 "MemTotal:       6427708 kB" 的行提取 kB 并转 MB。
