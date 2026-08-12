@@ -147,22 +147,25 @@ func handleModels(w http.ResponseWriter, r *http.Request) {
 
 // handleChatCompletions POST /v1/chat/completions —— OpenAI 兼容转发。
 // 流程（图片描述化，防止含图历史进入 VLM 导致推理质量下滑）：
-//  1. 校验入站 Authorization: Bearer <forward_key>（不匹配 → 401）
+//  1. 转发 key 校验（MYS-171 放宽）：仅配置了 ForwardKey 且请求携带匹配 key 时视为已鉴权；
+//     未配置 / 未携带 / 不匹配均放行，不强制拦截。
 //  2. 遍历所有 messages 的 content：
 //     - 文本块 → 保留
 //     - 图片块（image_url/image）→ 提取图片数据 → 哈希查缓存：
 //         * 命中 → 复用描述
 //         * 未命中 → 调 VLM 生成详细描述 → 缓存
 //       用文本块替换图片块：{type:text, text:"这里有一个 image，其内容如下：<描述>"}
-//  3. 所有请求统一路由到 LLM（替换 model 为 LLM model_name）
+//  3. 转发到 LLM：请求带非空 model 则保留，否则替换为配置的 LLM model_name
 //  4. 用 bmssm 内部存储的 LLM 上游 key 向供应商转发
 func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	cfg := currentConfig()
 
-	// 1. 转发 key 校验
-	if cfg.ForwardKey == "" || !validForwardKey(r, cfg.ForwardKey) {
-		http.Error(w, "unauthorized: invalid forward key", http.StatusUnauthorized)
-		return
+	// 1. 转发 key 校验（MYS-171：放宽策略，不做强制拦截）。
+	//    仅当配置了 ForwardKey 且请求携带匹配 key 时视为已鉴权；
+	//    key 未配置 / 请求未携带 / 不匹配均放行（本地回环代理，暴露面可控）。
+	//    兼容旧 picoclaw 链路：其携带匹配 key 的请求行为不变。
+	if cfg.ForwardKey != "" && !validForwardKey(r, cfg.ForwardKey) {
+		logger.Warn("llm proxy: forward key mismatch (config set, request key absent or wrong)")
 	}
 
 	body, err := io.ReadAll(r.Body)

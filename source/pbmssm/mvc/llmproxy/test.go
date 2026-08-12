@@ -107,7 +107,7 @@ func testLLMInference(ctx context.Context, cfg Config) TestResult {
 	return TestResult{Name: name, OK: true, Message: "LLM 推理成功: " + truncate(string(body), 200)}
 }
 
-// forwardLLM 核心转发：图片描述化（可选）+ 替换 model + 调 LLM 上游，返回响应体与状态码。
+// forwardLLM 核心转发：图片描述化（可选）+ model 请求优先/默认兜底 + 调 LLM 上游，返回响应体与状态码。
 // 供 handleChatCompletions 与测试接口共用。
 func forwardLLM(ctx context.Context, req map[string]interface{}, llm, vlm ProviderConfig) ([]byte, int, error) {
 	if !llm.Enabled || llm.ApiBase == "" || llm.ModelName == "" {
@@ -117,8 +117,11 @@ func forwardLLM(ctx context.Context, req map[string]interface{}, llm, vlm Provid
 	if err := describeImagesInRequest(req, vlm); err != nil {
 		return nil, 0, fmt.Errorf("image describe failed: %w", err)
 	}
-	// 替换 model 为 LLM 模型名
-	req["model"] = llm.ModelName
+	// MYS-171：model 名称支持——请求带非空 model 则保留（不替换），
+	// 否则用默认配置的 LLM 模型名兜底。
+	if model, _ := req["model"].(string); model == "" {
+		req["model"] = llm.ModelName
+	}
 	body, _ := json.Marshal(req)
 
 	upstreamURL := strings.TrimRight(llm.ApiBase, "/") + "/chat/completions"

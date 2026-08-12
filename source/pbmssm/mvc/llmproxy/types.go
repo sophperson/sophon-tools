@@ -3,10 +3,10 @@
 // 转发逻辑参考 llm-proxy（https://github.com/zzttzzmyswy/llm-proxy）：
 // 客户端（如 PicoClaw）以任意模型名请求本模块内置的 OpenAI 兼容端点，
 // 代理检测请求中是否含 image_url 分流到 VLM / LLM 配置的上游，
-// 并将 model 替换为对应配置的模型名后转发到上游 api_base。
+// 请求带非空 model 则保留，否则替换为对应配置的模型名后转发到上游 api_base。
 //
-// 入站请求需携带转发 key（Authorization: Bearer <forward_key>），
-// 校验通过后才用 bmssm 内部存储的上游 key 向供应商转发。
+// 入站 key 校验（MYS-171 放宽）：仅配置了 ForwardKey 且请求携带匹配 key 时视为已鉴权；
+// 未配置 / 未携带 / 不匹配均放行，不强制拦截。转发时用 bmssm 内部存储的上游 key。
 package llmproxy
 
 import "time"
