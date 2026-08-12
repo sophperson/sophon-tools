@@ -62,10 +62,14 @@ type WebchatSession struct {
 func (WebchatSession) TableName() string { return "agent_session" }
 
 // ChatMessage 会话历史消息快照（渲染用；reasonix 侧 transcript 是权威上下文）。
+// Role 取值：user / assistant。Kind 区分渲染形态：text / thought / tool_calls
+//（user 消息 Kind 一般留空）。Model 记录 assistant 文本来源模型名。
 type ChatMessage struct {
-	Role    string `json:"role"`    // user / assistant / thought / tool_calls
-	Content string `json:"content"` // 文本或 JSON 摘要
-	ID      string `json:"id,omitempty"`
+	Role     string `json:"role"`     // user / assistant
+	Content  string `json:"content"`  // 文本或折叠块摘要
+	Kind     string `json:"kind,omitempty"`     // text / thought / tool_calls
+	Model    string `json:"model,omitempty"`    // assistant 模型名
+	ID       string `json:"id,omitempty"`       // 消息/工具 id（messageId / toolCallId）
 }
 
 // ACPSessionUpdate ACP session/update 通知的通用载荷（判别子见 Discriminator）。

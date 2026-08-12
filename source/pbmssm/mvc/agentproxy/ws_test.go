@@ -462,6 +462,50 @@ func TestWSSessionList(t *testing.T) {
 	}
 }
 
+func TestWSSessionHistory(t *testing.T) {
+	mod, _ := mockModuleForWS(t)
+	h := newHub(mod, "key")
+	srv := httptest.NewServer(http.HandlerFunc(h.serveWS))
+	t.Cleanup(srv.Close)
+
+	sm := mod.sessions
+	sm.mu.Lock()
+	sm.sessions["web-9"] = &WebchatSession{
+		ID: "web-9", ACPSessionID: "acp-9", Title: "历史",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "你好"},
+			{Role: "assistant", Kind: "text", Content: "很高兴", Model: "m1"},
+			{Role: "assistant", Kind: "thought", Content: "思考中"},
+		},
+	}
+	sm.mu.Unlock()
+
+	conn := dialWS(t, wsURL(srv.URL)+wsPath, "token.key")
+	_ = conn.WriteJSON(map[string]any{"type": "session.history", "session_id": "web-9"})
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		m := readFrame(t, conn)
+		if m["type"] != "session.history" {
+			continue
+		}
+		p := m["payload"].(map[string]any)
+		if p["session_id"] != "web-9" {
+			t.Fatalf("history echoed session_id = %v, want web-9", p["session_id"])
+		}
+		raw, _ := p["messages"].([]any)
+		if len(raw) != 3 {
+			t.Fatalf("history messages len = %d, want 3", len(raw))
+		}
+		msg1, _ := raw[1].(map[string]any)
+		if msg1["kind"] != "text" || msg1["content"] != "很高兴" {
+			t.Errorf("msg[1] = %v, want kind=text content=很高兴", msg1)
+		}
+		return
+	}
+	t.Fatal("no session.history frame received")
+}
+
 func TestWSMultiSession(t *testing.T) {
 	mod, tr := mockModuleForWS(t)
 	h := newHub(mod, "key")
