@@ -12,19 +12,20 @@ import (
 	"bmssm/logger"
 )
 
-// Module 是 agentproxy 适配器的顶层装配：进程管理 + ACP 客户端 + 会话管理。
-// S2 交付核心链路：reasonix 进程自愈、initialize 握手、会话 new/prompt/cancel/close、
-// 流式 update 分发（事件回调给协议层，S3 转 WS 帧）。
+// Module 是 agentproxy 适配器的顶层装配：进程管理 + ACP 客户端 + 会话管理 + WS 端点。
+// S3 起包含 WS 服务（ws.go Hub）：模块事件广播 → Hub 按连接路由 → 前端协议帧。
 type Module struct {
 	cfg      Config
 	db       *gorm.DB
 	pm       *ProcessManager
 	client   *Client
 	sessions *SessionManager
+	hub      *Hub // WS 端点（S3）
 
-	mu      sync.Mutex
-	started bool
-	eventFn func(*ACPSessionUpdate) // S3 协议层注入：ACP 事件 → WS 帧
+	mu        sync.Mutex
+	started   bool
+	nextID    int64
+	listeners map[int64]func(*ACPSessionUpdate) // 流式事件监听者（Hub 注册，广播分发）
 
 	stopOnce sync.Once
 }
@@ -60,20 +61,26 @@ func Shutdown() {
 	}
 }
 
-// NewModule 创建装配模块。eventFn 为流式事件回调（可为 nil，S3 注入）。
+// NewModule 创建装配模块。eventFn 为流式事件监听者（可为 nil；多个监听者可用
+// AddEventListener 注册，WS Hub 启动时自动注册）。
 func NewModule(cfg Config, db *gorm.DB, eventFn func(*ACPSessionUpdate)) *Module {
 	cfg.Normalize()
 	m := &Module{
-		cfg:     cfg,
-		db:      db,
-		eventFn: eventFn,
+		cfg:       cfg,
+		db:        db,
+		listeners: make(map[int64]func(*ACPSessionUpdate)),
+	}
+	if eventFn != nil {
+		m.listeners[m.nextID] = eventFn
+		m.nextID++
 	}
 	m.sessions = NewSessionManager(db, cfg.WorkDir)
 	m.pm = NewProcessManager(cfg, m.onProcessReady)
+	m.hub = newHub(m, forwardKey(db))
 	return m
 }
 
-// Start 启动适配器：迁移（已由初始化调用）、加载会话、启动进程。
+// Start 启动适配器：迁移（已由初始化调用）、加载会话、启动进程、拉起 WS 服务。
 // 幂等。
 func (m *Module) Start() error {
 	m.mu.Lock()
@@ -88,6 +95,15 @@ func (m *Module) Start() error {
 		_ = ensureWorkDir(m.cfg.WorkDir)
 	}
 	m.sessions.LoadAll()
+	// WS 服务随模块启动（与 enabled 无关：WebSocket 端点始终可连接，
+	// 但 reasonix 未就绪时发送会返回错误帧）。
+	if m.hub != nil {
+		go func() {
+			if err := m.hub.Start(); err != nil {
+				logger.Error("agentproxy: ws hub start failed: %v", err)
+			}
+		}()
+	}
 	if !m.cfg.Enabled {
 		logger.Info("agentproxy: disabled, reasonix acp not started")
 		return nil
@@ -95,9 +111,12 @@ func (m *Module) Start() error {
 	return m.pm.Start()
 }
 
-// Shutdown 优雅关闭：先关闭所有活动会话，再停止进程与客户端。
+// Shutdown 优雅关闭：关闭 WS 服务与连接、所有活动会话，再停止进程与客户端。
 func (m *Module) Shutdown() {
 	m.stopOnce.Do(func() {
+		if m.hub != nil {
+			m.hub.Stop()
+		}
 		m.mu.Lock()
 		client := m.client
 		m.mu.Unlock()
@@ -133,11 +152,49 @@ func (m *Module) Process() *ProcessManager {
 	return m.pm
 }
 
-// SetEventFn 注入流式事件回调（S3 协议层调用，连接级）。
+// AddEventListener 注册流式事件监听者，返回可注销的句柄。
+// S3 Hub 启动时调用；多个监听者广播分发。
+func (m *Module) AddEventListener(fn func(*ACPSessionUpdate)) (remove func()) {
+	if fn == nil {
+		return func() {}
+	}
+	m.mu.Lock()
+	id := m.nextID
+	m.nextID++
+	m.listeners[id] = fn
+	m.mu.Unlock()
+	return func() {
+		m.mu.Lock()
+		delete(m.listeners, id)
+		m.mu.Unlock()
+	}
+}
+
+// SetEventFn 设置/清除唯一流式事件监听者（兼容旧用法；清除传 nil）。
 func (m *Module) SetEventFn(fn func(*ACPSessionUpdate)) {
 	m.mu.Lock()
-	m.eventFn = fn
+	m.listeners = make(map[int64]func(*ACPSessionUpdate))
+	if fn != nil {
+		m.listeners[m.nextID] = fn
+		m.nextID++
+	}
 	m.mu.Unlock()
+}
+
+// dispatchEvent 收到 session/update 解析结果，广播给所有监听者。
+func (m *Module) dispatchEvent(ev *ACPSessionUpdate) {
+	if ev == nil {
+		return
+	}
+	m.mu.Lock()
+	fns := make([]func(*ACPSessionUpdate), 0, len(m.listeners))
+	for _, fn := range m.listeners {
+		fns = append(fns, fn)
+	}
+	m.mu.Unlock()
+	for _, fn := range fns {
+		fn(ev)
+	}
 }
 
 // onProcessReady 每次 reasonix 进程成功启动后被回调：
@@ -173,19 +230,6 @@ func (m *Module) onProcessReady() {
 	// 恢复 active 会话
 	if m.sessions != nil {
 		m.sessions.Restore(ctx, m.client)
-	}
-}
-
-// dispatchEvent 收到 session/update 解析结果，转事件回调。
-func (m *Module) dispatchEvent(ev *ACPSessionUpdate) {
-	if ev == nil {
-		return
-	}
-	m.mu.Lock()
-	fn := m.eventFn
-	m.mu.Unlock()
-	if fn != nil {
-		fn(ev)
 	}
 }
 
@@ -225,4 +269,20 @@ func ensureWorkDir(dir string) error {
 		return err
 	}
 	return nil
+}
+
+// forwardKey 读取转发 key（WS 子协议 token.<key> 认证凭据）。
+// 复用 llm_proxy_config.forward_key（与 pico 模式完全一致，前端 PicoWS 零改动）。
+// 读失败返回空串（认证放行——对齐 MYS-171 放宽策略）。
+func forwardKey(db *gorm.DB) string {
+	if db == nil {
+		return ""
+	}
+	var cfg struct {
+		ForwardKey string `gorm:"column:forward_key"`
+	}
+	if err := db.Table("llm_proxy_config").Where("id = 1").Scan(&cfg).Error; err != nil {
+		return ""
+	}
+	return cfg.ForwardKey
 }

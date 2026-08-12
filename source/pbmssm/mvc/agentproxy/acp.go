@@ -90,10 +90,12 @@ type Client struct {
 }
 
 // call 一次上行请求的等待记录。updates 仅在 Prompt 时非 nil（流式更新通道）。
+// sessionID 仅 Prompt 时非空，用于把 session/update 通知匹配到对应 prompt 的流。
 type call struct {
-	id      int64
-	resp    chan *RPCResponse
-	updates chan *ACPSessionUpdate
+	id        int64
+	sessionID string
+	resp      chan *RPCResponse
+	updates   chan *ACPSessionUpdate
 }
 
 // NewClient 创建 ACP 客户端。onEvent 收到 session/update 解析结果；
@@ -214,6 +216,7 @@ func (c *Client) Prompt(ctx context.Context, id, text string) (<-chan *ACPSessio
 	}
 	updates := make(chan *ACPSessionUpdate, 64)
 	c.mu.Lock()
+	call.sessionID = id
 	call.updates = updates
 	c.mu.Unlock()
 
@@ -385,9 +388,26 @@ func (c *Client) dispatch(line []byte) {
 		switch msg.Method {
 		case "session/update":
 			ev := parseSessionUpdate(msg.Params)
-			if ev != nil && c.onEvent != nil {
+			if ev == nil {
+				return
+			}
+			// 模块级路由（S3 Hub 按 ACP sessionId 分发到 WS 连接）
+			if c.onEvent != nil {
 				c.onEvent(ev)
 			}
+			// Prompt 的流式通道：把该会话的更新推给对应在途 prompt（驱动 typing.stop）。
+			// 无匹配 prompt（如 load 回放）时跳过。
+			c.mu.Lock()
+			for _, cl := range c.pending {
+				if cl.updates != nil && cl.sessionID != "" && cl.sessionID == ev.SessionID {
+					select {
+					case cl.updates <- ev:
+					default:
+						// 流缓冲满：丢弃（慢消费者由连接层关闭，不阻塞读循环）
+					}
+				}
+			}
+			c.mu.Unlock()
 		default:
 			if c.onNotify != nil {
 				c.onNotify(msg.Method, msg.Params)
@@ -416,6 +436,7 @@ func (c *Client) failPending(err error) {
 //
 // 判别子位于 sessionUpdate 对象首键（agent_message_chunk / agent_thought_chunk /
 // tool_call / tool_call_update / plan / user_message_chunk / usage_update / session_info_update …）。
+// sessionId 取外层（标准 ACP 载荷）；sessionUpdate 内部带 sessionId 时以内部为准。
 func parseSessionUpdate(raw json.RawMessage) *ACPSessionUpdate {
 	if len(raw) == 0 {
 		return nil
@@ -434,7 +455,11 @@ func parseSessionUpdate(raw json.RawMessage) *ACPSessionUpdate {
 		// 尝试扁平
 		return parseFlatUpdate(raw)
 	}
-	return parseFlatUpdate(outer.Update.SessionUpdate)
+	ev := parseFlatUpdate(outer.Update.SessionUpdate)
+	if ev != nil && ev.SessionID == "" {
+		ev.SessionID = outer.SessionID
+	}
+	return ev
 }
 
 // parseFlatUpdate 从 sessionUpdate 对象提取判别子与公共字段。
