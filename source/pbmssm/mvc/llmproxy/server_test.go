@@ -52,7 +52,7 @@ func TestServiceLLMAndVLMConfig(t *testing.T) {
 	if cfg.LLMModel != "sophnet-deepseek" {
 		t.Errorf("default llmModel = %q", cfg.LLMModel)
 	}
-	if cfg.VLMModel != "sophnet-vl-flash" {
+	if cfg.VLMModel != "qwen3-vl-plus" {
 		t.Errorf("default vlmModel = %q", cfg.VLMModel)
 	}
 	if !cfg.LLMOverride || !cfg.VLMOverride {
@@ -310,6 +310,114 @@ func TestForwardModelOverride(t *testing.T) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// TestVLMUnconfiguredSophnetFallback 验证 MYS-193：VLM 未配置时，LLM API Base 为 Sophnet
+// → 隐式 VLM（ApiBase=Sophnet, ModelName=qwen3-vl-plus, key 复用 LLM 的 key）。
+func TestVLMUnconfiguredSophnetFallback(t *testing.T) {
+	cfg := Config{
+		LLMApiBase: SophnetApiBase,
+		LLMApiKey:  "llm-key",
+		LLMModel:   "sophnet-deepseek",
+		LLMEnabled: true,
+		// VLM 全空 = 未配置
+	}
+	vlm := cfg.VLM()
+	if !vlm.Enabled {
+		t.Error("implicit VLM should be enabled")
+	}
+	if vlm.ApiBase != SophnetApiBase {
+		t.Errorf("implicit VLM ApiBase = %q, want %q", vlm.ApiBase, SophnetApiBase)
+	}
+	if vlm.ModelName != "qwen3-vl-plus" {
+		t.Errorf("implicit VLM ModelName = %q, want qwen3-vl-plus", vlm.ModelName)
+	}
+	if vlm.ApiKey != "llm-key" {
+		t.Errorf("implicit VLM ApiKey = %q, want LLM key", vlm.ApiKey)
+	}
+}
+
+// TestVLMUnconfiguredLocalKeepsUnset 验证 MYS-193：VLM 未配置且 LLM 非 Sophnet（本地 LLM）
+// → 不产生隐式 VLM，保持未配置（转发时跳过描述化直接带 image 透传）。
+func TestVLMUnconfiguredLocalKeepsUnset(t *testing.T) {
+	cfg := Config{
+		LLMApiBase: "http://127.0.0.1:8080/v1",
+		LLMApiKey:  "k",
+		LLMModel:   "local-model",
+		LLMEnabled: true,
+		// VLM 全空 = 未配置
+	}
+	vlm := cfg.VLM()
+	if vlm.Enabled {
+		t.Error("local LLM must NOT get an implicit VLM")
+	}
+	if vlm.ModelName != "" || vlm.ApiBase != "" {
+		t.Errorf("local LLM VLM should stay empty, got %+v", vlm)
+	}
+}
+
+// TestVLMConfiguredKeepsConfigured 验证 VLM 已配置时原样返回（不触发隐式兜底）。
+func TestVLMConfiguredKeepsConfigured(t *testing.T) {
+	cfg := Config{
+		LLMApiBase: SophnetApiBase,
+		LLMModel:   "sophnet-deepseek",
+		LLMEnabled: true,
+		VLMApiBase: "http://vlm.example.com/v1",
+		VLMModel:   "custom-vlm",
+		VLMEnabled: true,
+	}
+	vlm := cfg.VLM()
+	if vlm.ApiBase != "http://vlm.example.com/v1" || vlm.ModelName != "custom-vlm" {
+		t.Errorf("configured VLM should be returned as-is, got %+v", vlm)
+	}
+}
+
+// TestVLMModelDefaultByApiBase 验证 defaultVLMModel：Sophnet → qwen3-vl-plus；本地 → 空。
+func TestVLMModelDefaultByApiBase(t *testing.T) {
+	if m := defaultVLMModel(SophnetApiBase); m != "qwen3-vl-plus" {
+		t.Errorf("sophnet default vlm model = %q, want qwen3-vl-plus", m)
+	}
+	if m := defaultVLMModel("http://127.0.0.1:8080/v1"); m != "" {
+		t.Errorf("local default vlm model = %q, want empty", m)
+	}
+}
+
+// TestSaveConfigVLMDefaultFallback 验证 SaveConfig：请求不带 VLMModel 时，
+// LLM 为 Sophnet → 落库 qwen3-vl-plus；LLM 为本地 → VLMModel 保持空。
+func TestSaveConfigVLMDefaultFallback(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	svc := NewService(db)
+
+	// Sophnet LLM：不传 VLMModel → 落库默认 qwen3-vl-plus
+	saved, err := svc.SaveConfig(SaveRequest{
+		LLMApiBase: SophnetApiBase,
+		LLMApiKey:  "k",
+		LLMModel:   "sophnet-deepseek",
+	})
+	if err != nil {
+		t.Fatalf("save (sophnet): %v", err)
+	}
+	if saved.VLMModel != "qwen3-vl-plus" {
+		t.Errorf("sophnet save VLMModel = %q, want qwen3-vl-plus", saved.VLMModel)
+	}
+
+	// 本地 LLM：不传 VLMModel → VLMModel 保持空（本地 LLM 直接吃图）
+	saved2, err := svc.SaveConfig(SaveRequest{
+		LLMApiBase: "http://127.0.0.1:8080/v1",
+		LLMApiKey:  "k",
+		LLMModel:   "local-model",
+	})
+	if err != nil {
+		t.Fatalf("save (local): %v", err)
+	}
+	if saved2.VLMModel != "" {
+		t.Errorf("local save VLMModel = %q, want empty", saved2.VLMModel)
+	}
+	// normalizeDefaults 同样按 LLM 分流，不把本地场景的 VLMModel 回填为 qwen3-vl-plus
+	if got := svc.LoadConfig(); got.VLMModel != "" {
+		t.Errorf("local LoadConfig VLMModel = %q, want empty", got.VLMModel)
+	}
+}
 
 // TestForwardModelKeptForImage 验证带图请求：model 保留请求值，图片仍走 VLM 描述化后整体路由 LLM。
 func TestForwardModelKeptForImage(t *testing.T) {
@@ -572,6 +680,158 @@ func TestImageCacheTTL(t *testing.T) {
 func mustJSON(v interface{}) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+// TestImagePassthroughLocalLLM 验证 MYS-193：VLM 未配置 + LLM 非 Sophnet（本地 LLM）
+// → 跳过描述化，含 image 的 body 原样转发到本地 LLM API。
+func TestImagePassthroughLocalLLM(t *testing.T) {
+	var gotBody map[string]interface{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"x","object":"chat.completion","choices":[]}`))
+	}))
+	defer upstream.Close()
+
+	db := setupTestDB(t)
+	defer db.Close()
+	svc := NewService(db)
+	off := false
+	cfg, _ := svc.SaveConfig(SaveRequest{
+		LLMApiBase: upstream.URL + "/llm", LLMApiKey: "k", LLMModel: "local-model",
+		LLMOverride: boolPtr(false),
+		// VLM 显式未配置（disabled + 空模型）
+		VLMEnabled: &off,
+	})
+	cfg.ForwardKey = "fk"
+	_ = svc.db.Model(&Config{}).Where("id = ?", 1).Update("forward_key", "fk").Error
+	setActive(svc.LoadConfig())
+
+	imgData := []byte("fake-png-bytes-local")
+	b64 := base64.StdEncoding.EncodeToString(imgData)
+	body, _ := json.Marshal(map[string]interface{}{
+		"model": "devproxy",
+		"messages": []map[string]interface{}{
+			{"role": "user", "content": []map[string]interface{}{
+				{"type": "text", "text": "what is this"},
+				{"type": "image_url", "image_url": map[string]string{"url": "data:image/png;base64," + b64}},
+			}},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handleChatCompletions(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	// 上游收到的 body 必须保留 image_url 块（未被描述化替换）
+	msgs := gotBody["messages"].([]interface{})
+	m0 := msgs[0].(map[string]interface{})
+	content := m0["content"].([]interface{})
+	foundImage := false
+	for _, c := range content {
+		block := c.(map[string]interface{})
+		if block["type"] == "image_url" {
+			foundImage = true
+		}
+		if block["type"] == "text" && strings.Contains(block["text"].(string), "这里有一个 image") {
+			t.Error("image should NOT be described when VLM unconfigured (local LLM)")
+		}
+	}
+	if !foundImage {
+		t.Errorf("image_url block should be passed through untouched, got: %s", mustJSON(gotBody))
+	}
+}
+
+// TestImageDescribedForSophnetImplicitVLM 验证 MYS-193：VLM 未配置 + LLM 为 Sophnet
+// → 隐式 VLM（qwen3-vl-plus）仍对图片做描述化，描述请求 model 为 qwen3-vl-plus、
+// Authorization 复用 LLM 的 key。
+func TestImageDescribedForSophnetImplicitVLM(t *testing.T) {
+	var vlmModel string
+	var vlmAuth string
+	var gotLLMBody map[string]interface{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req map[string]interface{}
+		_ = json.Unmarshal(body, &req)
+		if strings.HasPrefix(r.URL.Path, "/vlm") {
+			vlmModel, _ = req["model"].(string)
+			vlmAuth = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"一只猫在沙发上"}}]}`))
+			return
+		}
+		// 其余请求（本测试场景中仅有 LLM 转发）即 LLM 上游
+		gotLLMBody = req
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"x","object":"chat.completion","choices":[]}`))
+	}))
+	defer upstream.Close()
+
+	db := setupTestDB(t)
+	defer db.Close()
+	svc := NewService(db)
+	off := false
+	cfg, _ := svc.SaveConfig(SaveRequest{
+		LLMApiBase: upstream.URL + "/llm", LLMApiKey: "k", LLMModel: "sophnet-model",
+		LLMOverride: boolPtr(false),
+		VLMEnabled:  &off,
+	})
+	cfg.ForwardKey = "fk"
+	_ = svc.db.Model(&Config{}).Where("id = ?", 1).Update("forward_key", "fk").Error
+	// 注入 Sophnet LLM API Base + 隐式 VLM 目标（Mock 上游）
+	cfg.LLMApiBase = SophnetApiBase
+	cfg.VLMApiBase = upstream.URL + "/vlm"
+	cfg.VLMApiKey = ""
+	cfg.LLMApiKey = "k"
+	setActive(cfg)
+	globalImageCache = newImageCache(10 << 20)
+
+	imgData := []byte("fake-png-bytes-sophnet")
+	b64 := base64.StdEncoding.EncodeToString(imgData)
+	body, _ := json.Marshal(map[string]interface{}{
+		"model": "devproxy",
+		"messages": []map[string]interface{}{
+			{"role": "user", "content": []map[string]interface{}{
+				{"type": "text", "text": "what is this"},
+				{"type": "image_url", "image_url": map[string]string{"url": "data:image/png;base64," + b64}},
+			}},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handleChatCompletions(rec, req)
+	// 注意：LLM 上游为真实 Sophnet（假 key 无法验证），LLM 转发必然 401；
+	// 本测试只验证「VLM 未配置 + LLM=Sophnet 时隐式 VLM 生效」：
+	//   1. 含图请求的图片被隐式 VLM（qwen3-vl-plus）描述化（mock 收到描述请求）
+	//   2. 描述请求 model=qwen3-vl-plus、Authorization=Bearer <LLM key>
+	// 若 mock 未收到描述请求（vlmModel 为空），说明隐式 VLM 未生效 → 测试失败。
+	if vlmModel != "qwen3-vl-plus" {
+		t.Fatalf("implicit VLM not used: vlmModel = %q, want qwen3-vl-plus (mock should receive describe request)", vlmModel)
+	}
+	if vlmAuth != "Bearer k" {
+		t.Errorf("implicit VLM auth = %q, want Bearer k (LLM key reused)", vlmAuth)
+	}
+	// 描述请求已到达 mock 即证明图片被描述化链路处理（LLM 转发发 Sophnet，mock 收不到 LLM body）
+	if gotLLMBody == nil {
+		t.Log("LLM 转发发 Sophnet（预期），mock 仅收到描述请求")
+	} else {
+		msgs := gotLLMBody["messages"].([]interface{})
+		m0 := msgs[0].(map[string]interface{})
+		content := m0["content"].([]interface{})
+		foundDesc := false
+		for _, c := range content {
+			block := c.(map[string]interface{})
+			if block["type"] == "text" && strings.Contains(block["text"].(string), "这里有一个 image") {
+				foundDesc = true
+			}
+		}
+		if !foundDesc {
+			t.Errorf("image should be described via implicit VLM, got: %s", mustJSON(gotLLMBody))
+		}
+	}
 }
 
 // TestModelsEndpoint 验证 /v1/models 返回 LLM/VLM 模型名。

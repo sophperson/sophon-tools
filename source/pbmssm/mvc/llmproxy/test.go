@@ -56,8 +56,17 @@ func testImageDispatch(ctx context.Context, cfg Config) TestResult {
 	if !llm.Enabled || llm.ApiBase == "" || llm.ModelName == "" {
 		return TestResult{Name: name, OK: false, Message: "LLM 上游未配置或未启用"}
 	}
-
-	// 构造含图请求（内嵌一张 1x1 PNG 测试图）。
+	// VLM 未配置（非 Sophnet 本地 LLM 场景）：跳过描述化，直接带 image 转发给本地 LLM。
+	if !vlm.Enabled || vlm.ApiBase == "" || vlm.ModelName == "" {
+		body, statusCode, err := forwardLLM(ctx, buildImageDispatchReq(), llm, vlm)
+		if err != nil {
+			return TestResult{Name: name, OK: false, Message: "转发失败: " + err.Error()}
+		}
+		if statusCode != http.StatusOK {
+			return TestResult{Name: name, OK: false, Message: fmt.Sprintf("上游返回 %d: %s", statusCode, truncate(string(body), 200))}
+		}
+		return TestResult{Name: name, OK: true, Message: "VLM 未配置，图片直接透传本地 LLM 成功: " + truncate(string(body), 200)}
+	}
 	// 注意：messages 必须用 []interface{} 构造（与 JSON 反序列化后类型一致），
 	// 否则 describeImagesInRequest 的 []interface{} 类型断言会失败，图片不会被描述化。
 	png := testPNG()
@@ -82,6 +91,24 @@ func testImageDispatch(ctx context.Context, cfg Config) TestResult {
 		return TestResult{Name: name, OK: false, Message: fmt.Sprintf("上游返回 %d: %s", statusCode, truncate(string(body), 200))}
 	}
 	return TestResult{Name: name, OK: true, Message: "图片描述化 + LLM 转发成功: " + truncate(string(body), 200)}
+}
+
+// buildImageDispatchReq 构造带图请求（内嵌一张 1x1 PNG 测试图）。
+func buildImageDispatchReq() map[string]interface{} {
+	png := testPNG()
+	b64 := base64.StdEncoding.EncodeToString(png)
+	return map[string]interface{}{
+		"model": "devproxy",
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role": "user",
+				"content": []interface{}{
+					map[string]interface{}{"type": "text", "text": "请用一句话描述这张图片"},
+					map[string]interface{}{"type": "image_url", "image_url": map[string]interface{}{"url": "data:image/png;base64," + b64}},
+				},
+			},
+		},
+	}
 }
 
 // testLLMInference 测试纯文本 LLM 推理。
@@ -109,13 +136,17 @@ func testLLMInference(ctx context.Context, cfg Config) TestResult {
 
 // forwardLLM 核心转发：图片描述化（可选）+ model 请求优先/默认兜底 + 调 LLM 上游，返回响应体与状态码。
 // 供 handleChatCompletions 与测试接口共用。
+// VLM 未配置时（!vlm.Enabled || ApiBase=="" || ModelName==""）跳过描述化：
+// 本地 LLM 场景（LLM API Base 非 Sophnet）直接透传含 image 的 body 给本地 API。
 func forwardLLM(ctx context.Context, req map[string]interface{}, llm, vlm ProviderConfig) ([]byte, int, error) {
 	if !llm.Enabled || llm.ApiBase == "" || llm.ModelName == "" {
 		return nil, 0, fmt.Errorf("llm upstream not configured")
 	}
-	// 图片描述化（若含图）
-	if err := describeImagesInRequest(req, vlm); err != nil {
-		return nil, 0, fmt.Errorf("image describe failed: %w", err)
+	// 图片描述化（若含图）：VLM 已配置才描述；未配置则原样透传（本地 LLM 直接吃图）
+	if vlm.Enabled && vlm.ApiBase != "" && vlm.ModelName != "" {
+		if err := describeImagesInRequest(req, vlm); err != nil {
+			return nil, 0, fmt.Errorf("image describe failed: %w", err)
+		}
 	}
 	// 覆盖下游请求（OverrideModel）控制转发的 model 取值：
 	//   - true：无论下游请求里 model 是什么，转发时一律强制替换为配置的默认模型名；
