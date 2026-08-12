@@ -92,3 +92,31 @@ func (ctrl *Controller) ListModels(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, response.OK(gin.H{"models": models}))
 }
+
+// GetServiceStatus GET /api/v1/llm-proxy/service/status
+// 返回 sophpicoclaw 服务状态（systemd 状态 + 端口 + 日志尾部）。
+func (ctrl *Controller) GetServiceStatus(c *gin.Context) {
+	st, err := GetSophpicoclawStatus()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, response.Fail(err.Error()))
+		return
+	}
+	c.JSON(http.StatusOK, response.OK(st))
+}
+
+// ServiceAction POST /api/v1/llm-proxy/service/action  body: {"action":"restart"}
+// 对 sophpicoclaw 执行 start/stop/restart/enable/disable。
+func (ctrl *Controller) ServiceAction(c *gin.Context) {
+	var req struct {
+		Action string `json:"action" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, response.Fail("invalid request body"))
+		return
+	}
+	if err := ActionSophpicoclaw(req.Action); err != nil {
+		c.JSON(http.StatusBadRequest, response.Fail(err.Error()))
+		return
+	}
+	c.JSON(http.StatusOK, response.OK(gin.H{"message": "action " + req.Action + " executed"}))
+}

@@ -15,8 +15,8 @@ import (
 	firewallCtrl "bmssm/mvc/firewall"
 	"bmssm/mvc/hardware"
 	"bmssm/mvc/health"
-	"bmssm/mvc/logs"
 	llmproxyCtrl "bmssm/mvc/llmproxy"
+	"bmssm/mvc/logs"
 	metricsCtrl "bmssm/mvc/metrics"
 	"bmssm/mvc/network"
 	portsCtrl "bmssm/mvc/ports"
@@ -114,6 +114,8 @@ func Register(r *gin.Engine) {
 		api.GET("/llm-proxy/config", llmproxyCtrl.GetConfig)
 		// 模型列表（从供应商拉取，供前端弹窗选择）
 		api.GET("/llm-proxy/models", llmproxyCtrl.ListModels)
+		// sophpicoclaw 服务状态（读）
+		api.GET("/llm-proxy/service/status", llmproxyCtrl.GetServiceStatus)
 
 		// Docker
 		api.GET("/docker/container", dockerCtrl.ListContainers)
@@ -169,6 +171,8 @@ func Register(r *gin.Engine) {
 		admin.POST("/llm-proxy/forward-key/reset", llmproxyCtrl.ResetForwardKey)
 		admin.POST("/llm-proxy/forward-key/write-picoclaw", llmproxyCtrl.WriteForwardKey)
 		admin.POST("/llm-proxy/test", llmproxyCtrl.RunTest)
+		// sophpicoclaw 服务操作（写）
+		admin.POST("/llm-proxy/service/action", llmproxyCtrl.ServiceAction)
 
 		// 软件/OTA（写）
 		admin.POST("/software/install", softwareCtrl.Install)
