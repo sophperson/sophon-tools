@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -623,4 +624,78 @@ func TestWSPersistAssistantOnRoundEnd(t *testing.T) {
 		}
 		return false
 	})
+}
+
+func TestWSSendResumeExistingSession(t *testing.T) {
+	mod, tr := mockModuleForWS(t)
+	h := newHub(mod, "key")
+	srv := httptest.NewServer(http.HandlerFunc(h.serveWS))
+	t.Cleanup(srv.Close)
+	mod.SetEventFn(h.HandleEvent)
+	t.Cleanup(func() { mod.SetEventFn(nil) })
+
+	// 预置已有会话（含 ACP session id，state=closed 才会触发 resume）
+	sm := mod.sessions
+	sm.mu.Lock()
+	sm.sessions["web-r1"] = &WebchatSession{ID: "web-r1", ACPSessionID: "acp-r1", Title: "续聊", State: SessionClosed}
+	sm.mu.Unlock()
+
+	var mu sync.Mutex
+	var calls []string
+	go func() {
+		sc := bufioNewScanner(tr.in)
+		for {
+			req, err := tr.readRequestErr(sc)
+			if err != nil {
+				return
+			}
+			if req.ID == nil {
+				continue
+			}
+			mu.Lock()
+			calls = append(calls, req.Method)
+			mu.Unlock()
+			switch req.Method {
+			case "session/resume":
+				_ = tr.reply(map[string]any{"jsonrpc": "2.0", "id": *req.ID, "result": map[string]any{}})
+			case "session/prompt":
+				_ = tr.reply(map[string]any{"jsonrpc": "2.0", "id": *req.ID, "result": map[string]any{"stopReason": "end_turn"}})
+			default:
+				_ = tr.reply(map[string]any{"jsonrpc": "2.0", "id": *req.ID, "error": map[string]any{"code": -32601, "message": "Method not found"}})
+			}
+		}
+	}()
+
+	conn := dialWS(t, wsURL(srv.URL)+wsPath, "token.key")
+	// 携带 webchat id 发送 → 应 resume 而非 session/new
+	_ = conn.WriteJSON(map[string]any{"type": "message.send", "session_id": "web-r1", "payload": map[string]any{"content": "继续"}})
+
+	// 等待 prompt 发生
+	waitFor(t, 3*time.Second, "prompt called", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, m := range calls {
+			if m == "session/prompt" {
+				return true
+			}
+		}
+		return false
+	})
+	var sawNew, sawResume bool
+	mu.Lock()
+	for _, m := range calls {
+		if m == "session/new" {
+			sawNew = true
+		}
+		if m == "session/resume" {
+			sawResume = true
+		}
+	}
+	mu.Unlock()
+	if sawNew {
+		t.Error("unexpected session/new: existing webchat id should resume, not create")
+	}
+	if !sawResume {
+		t.Error("expected session/resume for existing webchat session")
+	}
 }

@@ -343,6 +343,31 @@ func (c *conn) handleMessageSendLocked(frame clientFrame) {
 	if content == "" {
 		return
 	}
+	// 携带已存在 webchat 会话 id → 先绑定并 resume 该会话（跨连接/跨浏览器续聊）
+	wid := frame.SessionID
+	if wid == "" {
+		if p, ok := frame.Payload["session_id"].(string); ok {
+			wid = p
+		}
+	}
+	if wid != "" {
+		if _, ok := c.module.Sessions().Get(wid); ok {
+			ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+			defer cancel()
+			client := c.module.Client()
+			if client == nil {
+				c.enqueueErrorLocked("reasonix 未就绪", "prompt")
+				return
+			}
+			sw, err := c.module.Sessions().Switch(ctx, client, wid)
+			if err != nil {
+				c.enqueueErrorLocked("恢复会话失败："+err.Error(), "session_resume")
+				return
+			}
+			c.resumeSessionLocked(sw)
+		}
+		// wid 存在但 Get 未命中 → 视为未知会话，落回新建分支（向后兼容）
+	}
 	if c.session == nil {
 		if err := c.ensureSessionLocked(); err != nil {
 			c.enqueueErrorLocked("无法创建会话："+err.Error(), "session_new")
@@ -354,6 +379,15 @@ func (c *conn) handleMessageSendLocked(frame clientFrame) {
 	if err := c.promptLocked(content); err != nil {
 		c.enqueueErrorLocked("发送失败："+err.Error(), "prompt")
 	}
+}
+
+// resumeSessionLocked 把连接绑定到已存在的 webchat 会话（resume 后绑定并注册事件路由）。
+// 前置：持 c.mu。
+func (c *conn) resumeSessionLocked(s *WebchatSession) {
+	c.bindSessionLocked(s)
+	c.hub.mu.Lock()
+	c.hub.byACP[s.ACPSessionID] = c
+	c.hub.mu.Unlock()
 }
 
 // ensureSessionLocked 确保连接已绑定 webchat 会话（首次发送时自动创建）。
