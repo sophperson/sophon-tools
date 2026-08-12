@@ -201,8 +201,14 @@ func (c *Client) ListSessions(ctx context.Context, cwd string) ([]SessionInfo, e
 
 // Prompt 发起 session/prompt（长驻请求）。返回更新流与取消函数。
 // 不设普通超时；用 promptTimeout（10min）防悬挂。
+// promptBlocks 按 ACP v1 把纯文本编码为 ContentBlock 数组（reasonix 要求
+// session/prompt.prompt 是 []acp.ContentBlock，非裸字符串）。
+func promptBlocks(text string) []map[string]string {
+	return []map[string]string{{"type": "text", "text": text}}
+}
+
 func (c *Client) Prompt(ctx context.Context, id, text string) (<-chan *ACPSessionUpdate, func() error, error) {
-	params, _ := json.Marshal(map[string]any{"sessionId": id, "prompt": text})
+	params, _ := json.Marshal(map[string]any{"sessionId": id, "prompt": promptBlocks(text)})
 	// 注册 pending，不阻塞等待（响应即 stopReason）
 	call := c.register()
 	if err := c.pm.WriteRequest(mustMarshal(RPCRequest{
@@ -430,39 +436,88 @@ func (c *Client) failPending(err error) {
 }
 
 // parseSessionUpdate 解析 session/update 通知为通用结构。
-// ACP v1 载荷形如：
 //
-//	{"sessionId":"...","update":{"sessionUpdate":{...}}}
+// reasonix 的 ACP v1 通知形如（sessionUpdate 为字符串判别子，载荷字段并列其下）：
 //
-// 判别子位于 sessionUpdate 对象首键（agent_message_chunk / agent_thought_chunk /
-// tool_call / tool_call_update / plan / user_message_chunk / usage_update / session_info_update …）。
-// sessionId 取外层（标准 ACP 载荷）；sessionUpdate 内部带 sessionId 时以内部为准。
+//	{"sessionId":"...","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"..."}}}
+//	{"sessionId":"...","update":{"sessionUpdate":"tool_call","toolCallId":"...","title":"...","status":"..."}}
+//
+// 兼容旧式嵌套对象（判别子作为 sessionUpdate 对象的首键）：
+//
+//	{"sessionId":"...","update":{"sessionUpdate":{"agent_message_chunk":{"messageId":"...","content":{"text":"..."}}}}}
 func parseSessionUpdate(raw json.RawMessage) *ACPSessionUpdate {
 	if len(raw) == 0 {
 		return nil
 	}
 	var outer struct {
-		SessionID string `json:"sessionId"`
-		Update    struct {
-			SessionUpdate json.RawMessage `json:"sessionUpdate"`
-		} `json:"update"`
+		SessionID string          `json:"sessionId"`
+		Update    json.RawMessage `json:"update"`
 	}
 	if err := json.Unmarshal(raw, &outer); err != nil {
-		// 兼容扁平载荷
-		return parseFlatUpdate(raw)
+		return nil
 	}
-	if len(outer.Update.SessionUpdate) == 0 {
-		// 尝试扁平
-		return parseFlatUpdate(raw)
+	if len(outer.Update) == 0 {
+		return nil
 	}
-	ev := parseFlatUpdate(outer.Update.SessionUpdate)
-	if ev != nil && ev.SessionID == "" {
+	ev := parseUpdateBody(outer.Update)
+	if ev == nil {
+		return nil
+	}
+	if ev.SessionID == "" {
 		ev.SessionID = outer.SessionID
 	}
 	return ev
 }
 
-// parseFlatUpdate 从 sessionUpdate 对象提取判别子与公共字段。
+// parseUpdateBody 从 update 对象提取判别子与公共字段。update 可能是
+// reasonix 的字符串判别子形态（recommend），也可能是旧式嵌套对象形态：
+//
+//	{"sessionUpdate":"agent_message_chunk","content":{...}}   // 字符串形态
+//	{"sessionUpdate":{"agent_message_chunk":{...}}}           // 嵌套对象形态
+func parseUpdateBody(raw json.RawMessage) *ACPSessionUpdate {
+	// 先探测是否为字符串判别子形态：update.sessionUpdate 是字符串，载荷字段并列。
+	var str struct {
+		SessionUpdate string          `json:"sessionUpdate"`
+		Content       json.RawMessage `json:"content"`
+		MessageID     string          `json:"messageId"`
+		ToolCallID    string          `json:"toolCallId"`
+		Title         string          `json:"title"`
+		Kind          string          `json:"kind"`
+		Status        string          `json:"status"`
+		Entries       json.RawMessage `json:"entries"`
+	}
+	if json.Unmarshal(raw, &str) == nil && str.SessionUpdate != "" {
+		ev := &ACPSessionUpdate{Discriminator: str.SessionUpdate, Raw: map[string]any{}}
+		_ = json.Unmarshal(raw, &ev.Raw)
+		// content 可能是单块 {type,text} 或数组；text 取单块文本。
+		if len(str.Content) > 0 {
+			var block struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(str.Content, &block) == nil {
+				ev.Content = block.Text
+			}
+		}
+		ev.MessageID = str.MessageID
+		ev.ToolCallID = str.ToolCallID
+		ev.ToolCallTitle = str.Title
+		ev.ToolCallKind = str.Kind
+		ev.ToolCallStatus = str.Status
+		return ev
+	}
+	// 兼容旧式嵌套对象形态：判别子作为 sessionUpdate 对象的首键。
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) == nil {
+		if inner, ok := m["sessionUpdate"]; ok {
+			return parseFlatUpdate(inner)
+		}
+		return parseFlatUpdate(raw)
+	}
+	return nil
+}
+
+// parseFlatUpdate 从旧式嵌套对象提取判别子与公共字段（保留向后兼容与既有单测）。
 func parseFlatUpdate(raw json.RawMessage) *ACPSessionUpdate {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &m); err != nil {
@@ -484,17 +539,7 @@ func parseFlatUpdate(raw json.RawMessage) *ACPSessionUpdate {
 	_ = json.Unmarshal(raw, &ev.Raw)
 
 	switch disc {
-	case "agent_message_chunk":
-		var body struct {
-			MessageID string `json:"messageId"`
-			Content   struct {
-				Text string `json:"text"`
-			} `json:"content"`
-		}
-		_ = json.Unmarshal(m[disc], &body)
-		ev.MessageID = body.MessageID
-		ev.Content = body.Content.Text
-	case "agent_thought_chunk":
+	case "agent_message_chunk", "agent_thought_chunk":
 		var body struct {
 			MessageID string `json:"messageId"`
 			Content   struct {
@@ -506,10 +551,10 @@ func parseFlatUpdate(raw json.RawMessage) *ACPSessionUpdate {
 		ev.Content = body.Content.Text
 	case "tool_call":
 		var body struct {
-			ToolCallID    string `json:"toolCallId"`
-			Title         string `json:"title"`
-			Kind          string `json:"kind"`
-			Status        string `json:"status"`
+			ToolCallID string `json:"toolCallId"`
+			Title      string `json:"title"`
+			Kind       string `json:"kind"`
+			Status     string `json:"status"`
 		}
 		_ = json.Unmarshal(m[disc], &body)
 		ev.ToolCallID = body.ToolCallID

@@ -179,6 +179,15 @@ func TestWSMessageSendStreaming(t *testing.T) {
 			t.Errorf("second request = %v, want session/prompt", req2)
 			return
 		}
+		// prompt 必须是 ContentBlock 数组（ACP v1 / reasonix 要求），非裸字符串
+		var p2 struct {
+			Prompt []map[string]string `json:"prompt"`
+		}
+		if err := json.Unmarshal(req2.Params, &p2); err != nil || len(p2.Prompt) != 1 ||
+			p2.Prompt[0]["type"] != "text" || p2.Prompt[0]["text"] != "你好" {
+			t.Errorf("session/prompt params = %s, want content-block array", req2.Params)
+			return
+		}
 		// 流式通知 + 响应
 		_ = tr.reply(map[string]any{
 			"jsonrpc": "2.0", "method": "session/update",
