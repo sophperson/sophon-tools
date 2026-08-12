@@ -95,7 +95,10 @@ func TestWSAuthSubprotocol(t *testing.T) {
 		t.Fatalf("valid subproto dial failed: %v", err)
 	}
 	conn.Close()
-	_ = resp
+	// 浏览器强制要求服务端回显所选子协议，否则握手失败。
+	if got := resp.Header.Get("Sec-Websocket-Protocol"); got != "token.secret-key-123" {
+		t.Fatalf("echoed subproto = %q, want token.secret-key-123", got)
+	}
 
 	// 错误子协议 → 403（无升级）
 	d2 := websocket.Dialer{Subprotocols: []string{"token.wrong"}}
@@ -177,6 +180,15 @@ func TestWSMessageSendStreaming(t *testing.T) {
 		req2, err := tr.readRequestErr(sc)
 		if err != nil || req2.Method != "session/prompt" {
 			t.Errorf("second request = %v, want session/prompt", req2)
+			return
+		}
+		// prompt 必须是 ContentBlock 数组（ACP v1 / reasonix 要求），非裸字符串
+		var p2 struct {
+			Prompt []map[string]string `json:"prompt"`
+		}
+		if err := json.Unmarshal(req2.Params, &p2); err != nil || len(p2.Prompt) != 1 ||
+			p2.Prompt[0]["type"] != "text" || p2.Prompt[0]["text"] != "你好" {
+			t.Errorf("session/prompt params = %s, want content-block array", req2.Params)
 			return
 		}
 		// 流式通知 + 响应

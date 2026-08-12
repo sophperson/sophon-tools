@@ -390,6 +390,63 @@ func TestParseSessionUpdate(t *testing.T) {
 	}
 }
 
+// TestParseSessionUpdate_ReasonixStringTag 验证 reasonix 真实 ACP 通知形态：
+// sessionUpdate 为字符串判别子，内容块 {type,text} 与载荷字段并列在 update 下。
+func TestParseSessionUpdate_ReasonixStringTag(t *testing.T) {
+	cases := []struct {
+		name       string
+		payload    string
+		disc       string
+		content    string
+		toolCallID string
+		toolStatus string
+	}{
+		{
+			name:    "agent_message_chunk",
+			payload: `{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"你好！有什么我可以帮你的吗？"}}}`,
+			disc: "agent_message_chunk", content: "你好！有什么我可以帮你的吗？",
+		},
+		{
+			name:    "agent_thought_chunk",
+			payload: `{"sessionId":"s1","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"用户要求我打招呼"}}}`,
+			disc: "agent_thought_chunk", content: "用户要求我打招呼",
+		},
+		{
+			name:       "tool_call",
+			payload:    `{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"tc1","title":"grep","kind":"bash","status":"pending"}}`,
+			disc: "tool_call", toolCallID: "tc1", toolStatus: "pending",
+		},
+		{
+			name:       "tool_call_update",
+			payload:    `{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc1","status":"completed"}}`,
+			disc: "tool_call_update", toolCallID: "tc1", toolStatus: "completed",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ev := parseSessionUpdate(json.RawMessage(tc.payload))
+			if ev == nil {
+				t.Fatal("parse returned nil")
+			}
+			if ev.Discriminator != tc.disc {
+				t.Fatalf("disc = %s, want %s", ev.Discriminator, tc.disc)
+			}
+			if ev.SessionID != "s1" {
+				t.Fatalf("sessionId = %s, want s1", ev.SessionID)
+			}
+			if tc.content != "" && ev.Content != tc.content {
+				t.Fatalf("content = %s, want %s", ev.Content, tc.content)
+			}
+			if tc.toolCallID != "" && ev.ToolCallID != tc.toolCallID {
+				t.Fatalf("toolCallId = %s, want %s", ev.ToolCallID, tc.toolCallID)
+			}
+			if tc.toolStatus != "" && ev.ToolCallStatus != tc.toolStatus {
+				t.Fatalf("status = %s, want %s", ev.ToolCallStatus, tc.toolStatus)
+			}
+		})
+	}
+}
+
 // TestStreamClosedOnEOF 验证读循环读到 EOF 时未决请求失败、流关闭。
 func TestStreamClosedOnEOF(t *testing.T) {
 	tr, pm := newStdIOTransport(t)
