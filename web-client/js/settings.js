@@ -1,21 +1,26 @@
 /**
- * settings.js — 设置面板逻辑（T3）
+ * settings.js — 设置面板逻辑（T3，T4 改为仅 Reasonix 后端）
  *
  * 职责：
- *   - 设置面板：pico token、WebSocket 地址、主题（浅/深色）
+ *   - 设置面板：WebSocket 地址、token（forward key）、主题（浅/深色）
  *   - localStorage 持久化（键 pico-web-chat.settings，与 chat.js 共用）
+ *   - 默认（且仅）连接 Reasonix WS 端点：ws://<host>:<port>/agent/ws（子协议 token.<forward_key>）
  *   - 主题切换：data-theme 属性即时生效并记忆
  *   - token 输入框显示/隐藏切换（敏感信息）
  *   - 保存后通过 onSave 回调重建 WebSocket 连接（应用新 token/地址）
  *
  * 依赖：chat.js 先加载，通过 window.ChatApp.getSettings / connect 协同。
- * 面板 DOM 结构由 index.html 静态提供（T1 已就位）。
+ * 面板 DOM 结构由 index.html 静态提供（T1 已就位，T4 移除后端下拉）。
  */
 (function () {
   'use strict';
 
   var SETTINGS_KEY = 'pico-web-chat.settings';
   var THEME_KEY = 'pico-web-chat.theme';
+
+  // Reasonix 默认值：与 ws.js 保持一致（ws.js 先加载）。
+  var REASONIX_DEFAULT_PORT = (window.PicoConstants && window.PicoConstants.REASONIX_DEFAULT_PORT) || 18990;
+  var REASONIX_DEFAULT_WS_PATH = (window.PicoConstants && window.PicoConstants.REASONIX_DEFAULT_WS_PATH) || '/agent/ws';
 
   /** 部署层注入配置（T6）：ws.js 提供 PicoConfig.injected()；缺失时视为无注入 */
   function injected() {
@@ -35,17 +40,23 @@
     }
   }
 
-  /** 当前 token 是否为「仅注入」：localStorage 未显式保存，且部署配置注入存在 */
+  /** 当前 token 是否为「仅注入」：localStorage 未显式保存，且注入配置存在 */
   function isTokenInjectedOnly() {
     return !hasLocalToken() && !!(injected() && injected().token);
   }
 
+  /** Reasonix 默认 ws 地址：注入配置优先，否则当前主机 + 默认端口 */
+  function defaultWsUrl() {
+    var inj = injected();
+    if (inj && inj.wsUrl) return inj.wsUrl;
+    return 'ws://' + window.location.hostname + ':' + REASONIX_DEFAULT_PORT + REASONIX_DEFAULT_WS_PATH;
+  }
+
   function defaultSettings() {
-    var wsUrl = 'ws://' + window.location.hostname + ':18790/pico/ws';
     var inj = injected();
     return {
-      wsUrl: inj && inj.wsUrl ? inj.wsUrl : wsUrl,
-      token: inj ? inj.token : '',
+      wsUrl: defaultWsUrl(),
+      token: inj && inj.token ? inj.token : '',
       model: 'DeepSeek-V4-Flash-0731',
       theme: 'light'
     };
@@ -57,7 +68,7 @@
       var raw = localStorage.getItem(SETTINGS_KEY);
       var s = raw ? JSON.parse(raw) : {};
       s = Object.assign({}, defaults, s);
-      // 兼容 T2：无 wsUrl 时用当前页面地址推导
+      // 兼容 T2：无 wsUrl 时用默认地址推导
       if (!s.wsUrl) s.wsUrl = defaults.wsUrl;
       if (s.theme !== 'light' && s.theme !== 'dark') s.theme = defaults.theme;
       // 开箱即用（T6）：localStorage 未显式保存 token 时，用注入配置兜底，
