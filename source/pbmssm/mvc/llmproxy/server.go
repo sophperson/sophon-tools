@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -20,7 +19,17 @@ import (
 
 	"bmssm/config"
 	"bmssm/logger"
+	"bmssm/pkg/system"
 )
+
+// runSystemctlRestart 通过 systemd 重启 sophpicoclaw 服务（可注入，测试用）。
+var runSystemctlRestart = func(name string) error {
+	_, errStr, err := system.RunCommandArgs("systemctl", "restart", name)
+	if err != nil {
+		return fmt.Errorf("systemctl restart %s: %v: %s", name, err, errStr)
+	}
+	return nil
+}
 
 // server 状态：配置变更时通过 UpdateServer 热更新（替换原子指针）。
 var (
@@ -414,11 +423,14 @@ func isImageBlock(b map[string]interface{}) bool {
 // --- 写入本地 picoclaw -------------------------------------------------------
 
 // devproxyKeyPath 返回 picoclaw devproxy.key 路径。
-// 优先 SOPHON_PICOCLAW_HOME，其次 /home/*/picoclaw-deploy 探测，最后当前用户主目录。
+// 优先 SOPHON_PICOCLAW_HOME，其次 /opt/sophon/picoclaw（新出厂路径），
+// 再回退 /home/*/picoclaw-deploy 探测，最后当前用户主目录。
 func devproxyKeyPath() (string, error) {
 	var home string
 	if h := os.Getenv("SOPHON_PICOCLAW_HOME"); h != "" {
 		home = h
+	} else if st, err := os.Stat("/opt/sophon/picoclaw/.picoclaw"); err == nil && st.IsDir() {
+		home = "/opt/sophon/picoclaw"
 	} else if entries, err := os.ReadDir("/home"); err == nil {
 		for _, e := range entries {
 			if e.IsDir() {
@@ -436,8 +448,8 @@ func devproxyKeyPath() (string, error) {
 	return filepath.Join(home, ".picoclaw", "devproxy.key"), nil
 }
 
-// WriteForwardKeyToPicoclaw 把转发 key 写入 /home/<user>/.picoclaw/devproxy.key，
-// 并重启 picoclaw gateway（及 launcher，若在运行）。
+// WriteForwardKeyToPicoclaw 把转发 key 写入 picoclaw devproxy.key，
+// 并重启 sophpicoclaw 服务（systemd 托管）。
 func WriteForwardKeyToPicoclaw(key string) error {
 	path, err := devproxyKeyPath()
 	if err != nil {
@@ -447,73 +459,18 @@ func WriteForwardKeyToPicoclaw(key string) error {
 	if err := os.WriteFile(path, []byte(key), 0o600); err != nil {
 		return fmt.Errorf("write devproxy.key: %w", err)
 	}
-	// 重启 gateway：picoclaw gateway restart（若 launcher 在运行则先重启 launcher）
+	// 重启 sophpicoclaw（systemd 统一管理 gateway 生命周期）
 	restartPicoclaw()
 	return nil
 }
 
-// restartPicoclaw 重启 picoclaw：先重启 launcher（触发 gateway 随启），
-// 若无 launcher 则直接重启 gateway 进程。
+// restartPicoclaw 通过 systemd 重启 sophpicoclaw 服务（替代旧 pkill+手工 spawn）。
 func restartPicoclaw() {
-	// 1. 尝试 pkill picoclaw-launcher（SIGTERM）
-	if out, err := exec.Command("pkill", "-TERM", "-f", "picoclaw-launcher").CombinedOutput(); err == nil {
-		logger.Info("picoclaw-launcher stopped: %s", string(out))
+	if err := runSystemctlRestart("sophpicoclaw.service"); err != nil {
+		logger.Warn("restart sophpicoclaw failed: %v", err)
+		return
 	}
-	// 2. 尝试 pkill gateway
-	if out, err := exec.Command("pkill", "-TERM", "-f", "picoclaw gateway").CombinedOutput(); err == nil {
-		logger.Info("picoclaw gateway stopped: %s", string(out))
-	}
-	// 3. 等待端口释放
-	waitPortRelease(18790, 10*time.Second)
-	waitPortRelease(18800, 10*time.Second)
-	// 4. 若存在 launcher 则重新拉起
-	home := picoclawHomeDir()
-	if home != "" {
-		launcher := filepath.Join(home, "picoclaw-deploy", "picoclaw-launcher")
-		if st, err := os.Stat(launcher); err == nil && !st.IsDir() {
-			cmd := exec.Command(launcher, "-public", "-no-browser")
-			cmd.Dir = filepath.Dir(launcher)
-			cmd.Env = append(os.Environ(), "HOME="+home)
-			if err := cmd.Start(); err == nil {
-				_ = cmd.Process.Release()
-				logger.Info("picoclaw-launcher restarted (pid=%d)", cmd.Process.Pid)
-				return
-			}
-		}
-	}
-	logger.Warn("picoclaw launcher not found; gateway restart may be required manually")
-}
-
-// picoclawHomeDir 返回 picoclaw 主目录（/home/<user>）。
-func picoclawHomeDir() string {
-	if h := os.Getenv("SOPHON_PICOCLAW_HOME"); h != "" {
-		return h
-	}
-	if entries, err := os.ReadDir("/home"); err == nil {
-		for _, e := range entries {
-			if e.IsDir() {
-				candidate := filepath.Join("/home", e.Name(), "picoclaw-deploy")
-				if st, err := os.Stat(candidate); err == nil && st.IsDir() {
-					return filepath.Join("/home", e.Name())
-				}
-			}
-		}
-	}
-	return ""
-}
-
-// waitPortRelease 轮询等待端口不再监听。
-func waitPortRelease(port int, timeout time.Duration) {
-	deadline := time.Now().Add(timeout)
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
-		if err != nil {
-			return
-		}
-		conn.Close()
-		time.Sleep(300 * time.Millisecond)
-	}
+	logger.Info("sophpicoclaw.service restarted via systemctl")
 }
 
 // flushWriter SSE 透传用：每次 Write 后 Flush。
