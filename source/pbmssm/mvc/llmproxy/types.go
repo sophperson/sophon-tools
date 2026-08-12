@@ -9,7 +9,10 @@
 // 未配置 / 未携带 / 不匹配均放行，不强制拦截。转发时用 bmssm 内部存储的上游 key。
 package llmproxy
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // ProviderConfig 单套上游模型配置（LLM / VLM 各一份）。
 type ProviderConfig struct {
@@ -42,7 +45,7 @@ type Config struct {
 // TableName 指定表名。
 func (Config) TableName() string { return "llm_proxy_config" }
 
-// DefaultConfig 返回默认配置（sophnet 上游：LLM=deepseek，VLM=vl-flash）。
+// DefaultConfig 返回默认配置（sophnet 上游：LLM=deepseek，VLM=qwen3-vl-plus）。
 // ApiBase 为 OpenAI 兼容 base（转发时直接拼 /chat/completions）。
 // LLMOverride/VLMOverride 默认开启「覆盖下游请求」：新装转发一律用默认模型名。
 func DefaultConfig() Config {
@@ -53,7 +56,7 @@ func DefaultConfig() Config {
 		LLMEnabled:  true,
 		LLMOverride: true,
 		VLMApiBase:  "https://www.sophnet.com/api/open-apis/v1",
-		VLMModel:    "sophnet-vl-flash",
+		VLMModel:    "qwen3-vl-plus",
 		VLMEnabled:  true,
 		VLMOverride: true,
 	}
@@ -67,14 +70,58 @@ const (
 	ProviderVLM Provider = "vlm"
 )
 
+// SophnetApiBase 是 sophnet 官方 API 的 OpenAI 兼容 base 地址。
+// 判断 LLM 上游是否为 Sophnet 的判定源：LLM API Base URL 等于它时，视为 Sophnet 云端 LLM。
+const SophnetApiBase = "https://www.sophnet.com/api/open-apis/v1"
+
+// SophnetVLMModel 是 Sophnet 场景下 VLM 未配置时的默认视觉模型。
+const SophnetVLMModel = "qwen3-vl-plus"
+
+// defaultVLMModel 返回 VLM 默认模型：LLM 上游为 Sophnet 时用 qwen3-vl-plus，
+// 否则（本地 LLM）保持空（VLM 未配置 → 不经过描述化，直接带 image 向本地 API 请求）。
+func defaultVLMModel(llmApiBase string) string {
+	if strings.TrimSpace(llmApiBase) == SophnetApiBase {
+		return SophnetVLMModel
+	}
+	return ""
+}
+
 // LLM 返回 LLM 上游配置。
 func (c Config) LLM() ProviderConfig {
 	return ProviderConfig{ApiBase: c.LLMApiBase, ApiKey: c.LLMApiKey, ModelName: c.LLMModel, Enabled: c.LLMEnabled, OverrideModel: c.LLMOverride}
 }
 
 // VLM 返回 VLM 上游配置。
+// VLM 未配置时按 LLM API Base URL 分流默认模型（MYS-193）：
+//   - LLM 为 Sophnet（apiBase == SophnetApiBase）→ 隐式 Sophnet VLM（qwen3-vl-plus），
+//     图片仍走描述化链路，key 复用 LLM 的 ApiKey；
+//   - 否则（本地 LLM）→ 保持未配置，forwardLLM 将跳过描述化、直接带 image 转发给本地 LLM。
 func (c Config) VLM() ProviderConfig {
-	return ProviderConfig{ApiBase: c.VLMApiBase, ApiKey: c.VLMApiKey, ModelName: c.VLMModel, Enabled: c.VLMEnabled, OverrideModel: c.VLMOverride}
+	vlm := ProviderConfig{ApiBase: c.VLMApiBase, ApiKey: c.VLMApiKey, ModelName: c.VLMModel, Enabled: c.VLMEnabled, OverrideModel: c.VLMOverride}
+	if vlm.Enabled && vlm.ApiBase != "" && vlm.ModelName != "" {
+		return vlm
+	}
+	if strings.TrimSpace(c.LLMApiBase) == SophnetApiBase {
+		return ProviderConfig{
+			// 隐式 VLM 默认打到 Sophnet；已有 VLMApiBase 配置（如测试注入）则优先复用
+			ApiBase:       nonEmptyVLMBase(c.VLMApiBase, SophnetApiBase),
+			ApiKey:        c.LLMApiKey,
+			ModelName:     SophnetVLMModel,
+			Enabled:       true,
+			OverrideModel: true,
+		}
+	}
+	return vlm
+}
+
+// nonEmptyVLMBase 取第一个非空值；全部为空时回退 fallback。
+func nonEmptyVLMBase(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 // Provider 按类型取上游配置。

@@ -85,7 +85,9 @@ func (s *Service) SaveConfig(req SaveRequest) (Config, error) {
 		LLMOverride: enabled(req.LLMOverride, cur.LLMOverride),
 		VLMApiBase:  nonEmpty(req.VLMApiBase, cur.VLMApiBase, "https://www.sophnet.com/api/open-apis/v1"),
 		VLMApiKey:   nonEmpty(req.VLMApiKey, cur.VLMApiKey, ""),
-		VLMModel:    nonEmpty(req.VLMModel, cur.VLMModel, "sophnet-vl-flash"),
+		// VLMModel 为空（未配置）时按 LLM API Base 分流默认模型（MYS-193）：
+		// Sophnet → qwen3-vl-plus；本地 LLM → 保持空（不经过描述化，直接带 image 透传）。
+		VLMModel: nonEmpty(req.VLMModel, defaultVLMModel(nonEmpty(req.LLMApiBase, cur.LLMApiBase))),
 		VLMEnabled:  enabled(req.VLMEnabled, cur.VLMEnabled),
 		VLMOverride: enabled(req.VLMOverride, cur.VLMOverride),
 		ForwardKey:  cur.ForwardKey,
@@ -149,6 +151,7 @@ func (c Config) ToResponse(written bool) ConfigResponse {
 }
 
 // normalizeDefaults 补齐默认值（兼容旧表结构缺字段）。
+// VLMModel 为空时按 LLM API Base 分流（MYS-193）：Sophnet → qwen3-vl-plus；本地 LLM → 保持空。
 func (c *Config) normalizeDefaults() {
 	def := DefaultConfig()
 	if strings.TrimSpace(c.LLMApiBase) == "" {
@@ -161,7 +164,7 @@ func (c *Config) normalizeDefaults() {
 		c.VLMApiBase = def.VLMApiBase
 	}
 	if strings.TrimSpace(c.VLMModel) == "" {
-		c.VLMModel = def.VLMModel
+		c.VLMModel = defaultVLMModel(c.LLMApiBase)
 	}
 }
 
