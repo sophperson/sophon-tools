@@ -50,3 +50,15 @@ llm-proxy:
   enabled: true          # 总开关
   port: 18080            # 转发 server 端口（默认）
   listenIP: 127.0.0.1    # 仅本机可访问
+
+# Reasonix ACP 适配器（agentproxy）：管理 reasonix acp 进程 + ACP v1 客户端 + 会话。
+# WS 端点（18990）与前端协议适配在 S3 接入；此处只配进程与会话核心。
+# enabled 默认 false：reasonix 二进制部署（T5 部署步骤）后置 true 再重启 bmssm。
+agentproxy:
+  enabled: false                       # 总开关（reasonix 部署后置 true）
+  listenIP: 127.0.0.1                  # WS 服务绑定（S3 使用）
+  port: 18990                          # WS 端点端口（已核实空闲）
+  binaryPath: ""                       # 空则探测 PATH（reasonix）
+  workDir: /home/linaro                # 会话 cwd
+  model: ""                            # 空 = reasonix 默认；如 deepseek-pro
+  restartBackoffMax: 30s               # 崩溃重启退避上限

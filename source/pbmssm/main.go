@@ -11,6 +11,7 @@ import (
 
 	"bmssm/initialization"
 	"bmssm/logger"
+	"bmssm/mvc/agentproxy"
 )
 
 func main() {
@@ -48,5 +49,7 @@ func main() {
 	if err := s.Shutdown(ctx); err != nil {
 		logger.Error("graceful shutdown failed: %v", err)
 	}
+	// Reasonix ACP 适配器优雅关闭（关闭活动会话 + 停止进程）
+	agentproxy.Shutdown()
 	logger.Sync()
 }

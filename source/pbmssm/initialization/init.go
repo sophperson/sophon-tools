@@ -9,6 +9,7 @@ import (
 	"bmssm/global"
 	"bmssm/logger"
 	mwalarm "bmssm/mvc/alarm"
+	"bmssm/mvc/agentproxy"
 	"bmssm/mvc/llmproxy"
 	mwuser "bmssm/mvc/user"
 	"bmssm/pkg/alarm"
@@ -95,6 +96,11 @@ func InitBase() {
 	// 配置保存接口会热更新。
 	llmproxy.Migrate(database.DB())
 	llmproxy.StartServer(llmproxy.NewService(database.DB()).LoadConfig())
+
+	// Reasonix ACP 适配器（agentproxy）：进程管理 + ACP 客户端 + 会话管理。
+	// S2 只装配核心链路；WS 端点/协议适配在 S3 接入。
+	agentproxy.Migrate(database.DB())
+	agentproxy.Start(agentproxy.LoadConfig(), database.DB())
 }
 
 // createDefaultAdmin 在 user 表为空时插入默认 admin 用户。
