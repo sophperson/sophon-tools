@@ -2,6 +2,7 @@ package agentproxy
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -203,5 +204,42 @@ func TestFrameSerialization(t *testing.T) {
 	}
 	if _, ok := m["payload"]; !ok {
 		t.Errorf("json payload missing")
+	}
+}
+
+func TestRoundAssistants(t *testing.T) {
+	a := NewMessageAdapter("m")
+	// 模拟一次 round 的 ACP 事件流：两条 text chunk 归并为一条，一个 thought，一个 tool_call
+	sid := "web-1"
+	_ = a.OnACPEvent(&ACPSessionUpdate{Discriminator: "agent_message_chunk", MessageID: "m1", Content: "你"}, sid)
+	_ = a.OnACPEvent(&ACPSessionUpdate{Discriminator: "agent_message_chunk", MessageID: "m1", Content: "好"}, sid)
+	_ = a.OnACPEvent(&ACPSessionUpdate{Discriminator: "agent_thought_chunk", MessageID: "t1", Content: "思考"}, sid)
+	_ = a.OnACPEvent(&ACPSessionUpdate{Discriminator: "tool_call", ToolCallID: "tc1", ToolCallTitle: "bash", ToolCallKind: "execute", ToolCallStatus: "completed"}, sid)
+
+	msgs := a.RoundAssistants()
+	byKind := map[string]int{}
+	var textContent, toolSummary string
+	for _, m := range msgs {
+		byKind[m.Kind]++
+		switch m.Kind {
+		case "text":
+			textContent = m.Content
+		case "tool_calls":
+			toolSummary = m.Content
+		}
+	}
+	if byKind["text"] != 1 || byKind["thought"] != 1 || byKind["tool_calls"] != 1 {
+		t.Fatalf("RoundAssistants kinds = %+v, want text=1 thought=1 tool_calls=1", byKind)
+	}
+	if textContent != "你好" {
+		t.Errorf("text content = %q, want 你好 (chunks merged)", textContent)
+	}
+	if !strings.Contains(toolSummary, "bash") {
+		t.Errorf("tool summary = %q, want contains bash", toolSummary)
+	}
+	for _, m := range msgs {
+		if m.Role != "assistant" {
+			t.Errorf("role = %q, want assistant", m.Role)
+		}
 	}
 }

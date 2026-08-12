@@ -419,7 +419,7 @@ func (c *conn) promptLocked(content string) error {
 	}
 	c.module.Sessions().AppendMessage(s.ID, ChatMessage{Role: "user", Content: content})
 
-	go func(acpID string, tok int64) {
+	go func(acpID string, tok int64, webchatID string) {
 		// 等待更新流关闭（prompt 响应 stopReason 到达）
 		for range updates {
 		}
@@ -431,10 +431,14 @@ func (c *conn) promptLocked(content string) error {
 				case c.send <- c.adapter.OnPromptEnd(c.session.ID):
 				case <-c.done:
 				}
+				// 回合结束：把本回合 assistant（text/thought/tool_calls）全量落库
+				for _, am := range c.adapter.RoundAssistants() {
+					c.module.Sessions().AppendMessage(webchatID, am)
+				}
 			}
 		}
 		c.mu.Unlock()
-	}(s.ACPSessionID, token)
+	}(s.ACPSessionID, token, s.ID)
 	return nil
 }
 

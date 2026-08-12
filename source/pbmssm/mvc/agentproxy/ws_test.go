@@ -574,3 +574,53 @@ func TestWSMultiSession(t *testing.T) {
 		t.Errorf("session/new calls = %d, want 2 (connection1 reuses session, connection2 creates new)", got)
 	}
 }
+
+func TestWSPersistAssistantOnRoundEnd(t *testing.T) {
+	mod, tr := mockModuleForWS(t)
+	h := newHub(mod, "key")
+	srv := httptest.NewServer(http.HandlerFunc(h.serveWS))
+	t.Cleanup(srv.Close)
+	mod.SetEventFn(h.HandleEvent)
+	t.Cleanup(func() { mod.SetEventFn(nil) })
+
+	go func() {
+		sc := bufioNewScanner(tr.in)
+		req, err := tr.readRequestErr(sc)
+		if err != nil {
+			return
+		}
+		if req.Method != "session/new" {
+			t.Errorf("first = %s, want session/new", req.Method)
+		}
+		_ = tr.reply(map[string]any{"jsonrpc": "2.0", "id": *req.ID, "result": map[string]any{"sessionId": "acp-p1"}})
+		req2, err := tr.readRequestErr(sc)
+		if err != nil {
+			return
+		}
+		_ = tr.reply(map[string]any{
+			"jsonrpc": "2.0", "method": "session/update",
+			"params": map[string]any{"sessionId": "acp-p1", "update": map[string]any{"sessionUpdate": map[string]any{"agent_message_chunk": map[string]any{"messageId": "a1", "content": map[string]any{"text": "回答"}}}}},
+		})
+		_ = tr.reply(map[string]any{"jsonrpc": "2.0", "id": *req2.ID, "result": map[string]any{"stopReason": "end_turn"}})
+	}()
+
+	conn := dialWS(t, wsURL(srv.URL)+wsPath, "token.key")
+	_ = conn.WriteJSON(map[string]any{"type": "message.send", "payload": map[string]any{"content": "问题"}})
+	// 一直读到 typing.stop（round 结束）
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		m := readFrame(t, conn)
+		if m["type"] == "typing.stop" {
+			break
+		}
+	}
+	// round 落库后校验：Messages = [user问题, assistant回答]
+	waitFor(t, 3*time.Second, "assistant persisted", func() bool {
+		for _, s := range mod.sessions.List() {
+			if s.ACPSessionID == "acp-p1" && len(s.Messages) == 2 {
+				return s.Messages[1].Role == "assistant" && s.Messages[1].Content == "回答"
+			}
+		}
+		return false
+	})
+}
