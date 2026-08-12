@@ -40,11 +40,14 @@
             autocomplete="new-password"
           />
         </a-form-item>
-        <a-form-item label="模型名称">
+        <a-form-item label="默认模型名称">
           <a-input-group compact>
             <a-input v-model:value="form.llmModel" style="width: 60%" placeholder="sophnet-deepseek" />
             <a-button style="width: 20%" @click="openModelPicker('llm')">选择</a-button>
           </a-input-group>
+        </a-form-item>
+        <a-form-item label="覆盖下游请求" tooltip="开启后，无论下游请求中的 model 是什么，转接上游时都强制使用上述默认模型名称；关闭时，仅当下游未指定 model 才使用默认模型名称。">
+          <a-switch v-model:checked="form.llmOverrideModel" />
         </a-form-item>
         <a-form-item label="启用">
           <a-switch v-model:checked="form.llmEnabled" />
@@ -84,11 +87,14 @@
             autocomplete="new-password"
           />
         </a-form-item>
-        <a-form-item label="模型名称">
+        <a-form-item label="默认模型名称">
           <a-input-group compact>
             <a-input v-model:value="form.vlmModel" style="width: 60%" placeholder="sophnet-vl-flash" />
             <a-button style="width: 20%" @click="openModelPicker('vlm')">选择</a-button>
           </a-input-group>
+        </a-form-item>
+        <a-form-item label="覆盖下游请求" tooltip="开启后，无论下游请求中的 model 是什么，转接上游时都强制使用上述默认模型名称；关闭时，仅当下游未指定 model 才使用默认模型名称。">
+          <a-switch v-model:checked="form.vlmOverrideModel" />
         </a-form-item>
         <a-form-item label="启用">
           <a-switch v-model:checked="form.vlmEnabled" />
@@ -120,44 +126,11 @@
 
       <a-divider />
 
-      <!-- 转发 key 管理 -->
-      <div class="mt-4">
-        <div class="font-medium mb-2">转发 Key（客户端调用代理的凭据）</div>
-        <a-alert
-          v-if="form.forwardKeyReady"
-          type="success"
-          show-icon
-          message="已写入本地 picoclaw（devproxy.key）"
-          class="mb-2"
-        />
-        <a-input-group compact class="max-w-xl">
-          <a-input
-            v-model:value="form.forwardKey"
-            read-only
-            style="width: 60%"
-            placeholder="转发 key 尚未生成"
-          />
-          <a-button style="width: 12%" @click="copyForwardKey">拷贝</a-button>
-          <a-button style="width: 12%" :loading="resetting" @click="handleResetKey">重置</a-button>
-          <a-button
-            style="width: 16%"
-            type="primary"
-            :loading="writing"
-            @click="handleWriteKey"
-            >写入本地</a-button
-          >
-        </a-input-group>
-        <div class="text-gray-400 text-xs mt-1">
-          重置会生成新 key；「写入本地」将覆盖 /opt/sophon/picoclaw/.picoclaw/devproxy.key 并重启 sophpicoclaw 服务
-        </div>
-      </div>
-
-      <a-divider />
 
       <!-- 服务监控与管理 -->
       <div class="mt-4">
         <div class="mb-2 flex items-center justify-between">
-          <span class="font-medium">服务管理（sophpicoclaw）</span>
+          <span class="font-medium">服务管理（Reasonix）</span>
           <a-space>
             <a-button size="small" :loading="svcLoading" @click="refreshService">刷新</a-button>
           </a-space>
@@ -169,7 +142,7 @@
                 {{ svc.active ? '运行中' : '已停止' }}
               </a-tag>
             </a-descriptions-item>
-            <a-descriptions-item label="开机自启">
+            <a-descriptions-item label="Agent Proxy 启用">
               <a-tag :color="svc.enabledState === 'enabled' ? 'green' : 'orange'">
                 {{ svc.enabledState === 'enabled' ? '已启用' : '未启用' }}
               </a-tag>
@@ -190,9 +163,10 @@
               <a-button size="small" type="primary" :loading="svcActing" @click="doServiceAction('restart')">重启</a-button>
               <a-button size="small" :loading="svcActing" @click="doServiceAction('start')">启动</a-button>
               <a-button size="small" danger :loading="svcActing" @click="doServiceAction('stop')">停止</a-button>
-              <a-button size="small" :loading="svcActing" @click="doServiceAction('enable')">启用自启</a-button>
-              <a-button size="small" :loading="svcActing" @click="doServiceAction('disable')">关闭自启</a-button>
             </a-space>
+            <div class="text-gray-400 text-xs mt-1">
+              Reasonix 由 bmssm（agentproxy）托管，启停无需配置自启；启用与否取决于 bmssm 配置 agentproxy.enabled。
+            </div>
           </div>
           <a-collapse class="mt-2" :bordered="false">
             <a-collapse-panel key="log" header="最近日志">
@@ -201,7 +175,7 @@
           </a-collapse>
         </a-card>
         <a-card v-else size="small" class="max-w-2xl">
-          <a-empty description="未获取到服务状态（sophpicoclaw 未安装或 bmssm 不可达）" />
+          <a-empty description="未获取到服务状态（bmssm 不可达或 agentproxy 未初始化）" />
         </a-card>
       </div>
     </a-card>
@@ -259,8 +233,6 @@
     getAgentConfig,
     saveAgentConfig,
     getProviderModels,
-    resetForwardKey,
-    writeForwardKeyToPicoclaw,
     testAgentConfig,
     getServiceStatus,
     serviceAction,
@@ -294,13 +266,11 @@
 
   const activeKey = ref('llm');
   const saving = ref(false);
-  const resetting = ref(false);
-  const writing = ref(false);
   const testing = ref(false);
   const testResults = ref<TestResult[]>([]);
   const testAllOK = ref(true);
 
-  // sophpicoclaw 服务监控与管理
+  // Reasonix（agentproxy）服务监控与管理
   const svc = ref<ServiceStatus | null>(null);
   const svcLoading = ref(false);
   const svcActing = ref(false);
@@ -348,15 +318,15 @@
     llmApiKey: '',
     llmModel: '',
     llmEnabled: true,
+    llmOverrideModel: false,
     llmHasKey: false,
     vlmApiBase: '',
     vlmApiBaseType: 'sophnet',
     vlmApiKey: '',
     vlmModel: '',
     vlmEnabled: true,
+    vlmOverrideModel: false,
     vlmHasKey: false,
-    forwardKey: '',
-    forwardKeyReady: false,
   });
 
   // 根据已存 apiBase 推断类型（匹配预设则对应类型，否则兜底 sophnet）
@@ -395,14 +365,14 @@
       form.llmApiBaseType = inferApiBaseType(cfg.llmApiBase || '');
       form.llmModel = cfg.llmModel || '';
       form.llmEnabled = cfg.llmEnabled !== false;
+      form.llmOverrideModel = !!cfg.llmOverrideModel;
       form.llmHasKey = !!cfg.llmHasKey;
       form.vlmApiBase = cfg.vlmApiBase || SOPHNET_API_BASE;
       form.vlmApiBaseType = inferApiBaseType(cfg.vlmApiBase || '');
       form.vlmModel = cfg.vlmModel || '';
       form.vlmEnabled = cfg.vlmEnabled !== false;
+      form.vlmOverrideModel = !!cfg.vlmOverrideModel;
       form.vlmHasKey = !!cfg.vlmHasKey;
-      form.forwardKey = cfg.forwardKey || '';
-      form.forwardKeyReady = !!cfg.forwardKeyReady;
     }
   }
 
@@ -417,10 +387,12 @@
       llmApiKey: form.llmApiKey,
       llmModel: form.llmModel.trim() || 'sophnet-deepseek',
       llmEnabled: form.llmEnabled,
+      llmOverrideModel: form.llmOverrideModel,
       vlmApiBase: form.vlmApiBase.trim(),
       vlmApiKey: form.vlmApiKey,
       vlmModel: form.vlmModel.trim() || 'sophnet-vl-flash',
       vlmEnabled: form.vlmEnabled,
+      vlmOverrideModel: form.vlmOverrideModel,
     });
     saving.value = false;
     if (res.ok) {
@@ -487,56 +459,6 @@
     }
     picker.visible = false;
     message.success(`已选择模型 ${name}`);
-  }
-
-  // --- 转发 key 操作 ---
-  async function copyForwardKey() {
-    if (!form.forwardKey) {
-      message.warning('转发 key 尚未生成');
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(form.forwardKey);
-      message.success('已拷贝到剪贴板');
-    } catch {
-      // 兼容非 https 环境
-      const ta = document.createElement('textarea');
-      ta.value = form.forwardKey;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-      message.success('已拷贝到剪贴板');
-    }
-  }
-
-  async function handleResetKey() {
-    resetting.value = true;
-    const res = await resetForwardKey();
-    resetting.value = false;
-    if (res.ok && res.key) {
-      form.forwardKey = res.key;
-      form.forwardKeyReady = false;
-      message.success('转发 key 已重置（尚未写入本地 picoclaw）');
-    } else {
-      message.error(res.message || '重置失败');
-    }
-  }
-
-  async function handleWriteKey() {
-    if (!form.forwardKey) {
-      message.warning('转发 key 尚未生成');
-      return;
-    }
-    writing.value = true;
-    const res = await writeForwardKeyToPicoclaw();
-    writing.value = false;
-    if (res.ok) {
-      form.forwardKeyReady = true;
-      message.success('已写入本地 picoclaw 并重启');
-    } else {
-      message.error(res.message || '写入失败');
-    }
   }
 
   onMounted(() => {

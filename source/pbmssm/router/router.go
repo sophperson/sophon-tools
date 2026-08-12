@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"bmssm/middleware"
+	agentproxyCtrl "bmssm/mvc/agentproxy"
 	"bmssm/mvc/alarm"
 	"bmssm/mvc/audit"
 	"bmssm/mvc/compat"
@@ -51,6 +52,7 @@ func Register(r *gin.Engine) {
 	portsC := portsCtrl.DefaultController()
 	fwCtrl := firewallCtrl.DefaultController()
 	llmproxyCtrl := llmproxyCtrl.DefaultController()
+	agentCtrl := agentproxyCtrl.DefaultController()
 
 	// 公开：仅 login（含独立防爆破限流，约 5 次/12s/IP）
 	public := r.Group("/api/v1")
@@ -114,8 +116,8 @@ func Register(r *gin.Engine) {
 		api.GET("/llm-proxy/config", llmproxyCtrl.GetConfig)
 		// 模型列表（从供应商拉取，供前端弹窗选择）
 		api.GET("/llm-proxy/models", llmproxyCtrl.ListModels)
-		// sophpicoclaw 服务状态（读）
-		api.GET("/llm-proxy/service/status", llmproxyCtrl.GetServiceStatus)
+		// Reasonix 服务状态（读）——AI agent 后端由 agentproxy 管理
+		api.GET("/llm-proxy/service/status", agentCtrl.GetServiceStatus)
 
 		// Docker
 		api.GET("/docker/container", dockerCtrl.ListContainers)
@@ -171,8 +173,8 @@ func Register(r *gin.Engine) {
 		admin.POST("/llm-proxy/forward-key/reset", llmproxyCtrl.ResetForwardKey)
 		admin.POST("/llm-proxy/forward-key/write-picoclaw", llmproxyCtrl.WriteForwardKey)
 		admin.POST("/llm-proxy/test", llmproxyCtrl.RunTest)
-		// sophpicoclaw 服务操作（写）
-		admin.POST("/llm-proxy/service/action", llmproxyCtrl.ServiceAction)
+		// Reasonix 服务操作（写）——AI agent 后端由 agentproxy 管理
+		admin.POST("/llm-proxy/service/action", agentCtrl.ServiceAction)
 
 		// 软件/OTA（写）
 		admin.POST("/software/install", softwareCtrl.Install)

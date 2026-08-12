@@ -246,6 +246,67 @@ func TestForwardModelPrecedence(t *testing.T) {
 	}
 }
 
+// TestForwardModelOverride 验证「覆盖下游请求」开关（override）：
+// 开启后，无论下游请求带什么 model，转发时一律强制替换为默认模型名；
+// 关闭时保留下游 model（由 TestForwardModelPrecedence 覆盖）。
+func TestForwardModelOverride(t *testing.T) {
+	var gotModels []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req map[string]interface{}
+		_ = json.Unmarshal(body, &req)
+		if m, _ := req["model"].(string); m != "" {
+			gotModels = append(gotModels, m)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"x","object":"chat.completion","choices":[]}`))
+	}))
+	defer upstream.Close()
+
+	db := setupTestDB(t)
+	defer db.Close()
+	svc := NewService(db)
+	cfg, _ := svc.SaveConfig(SaveRequest{
+		LLMApiBase: upstream.URL + "/llm", LLMApiKey: "k", LLMModel: "llm-default",
+		LLMOverride: boolPtr(true),
+		VLMApiBase:  upstream.URL + "/vlm", VLMApiKey: "k", VLMModel: "vlm-target",
+	})
+	cfg.ForwardKey = "fk"
+	_ = svc.db.Model(&Config{}).Where("id = ?", 1).Update("forward_key", "fk").Error
+	setActive(svc.LoadConfig())
+
+	send := func(model interface{}) {
+		m := map[string]interface{}{
+			"messages": []map[string]interface{}{
+				{"role": "user", "content": "hi"},
+			},
+		}
+		if model != nil {
+			m["model"] = model
+		}
+		body, _ := json.Marshal(m)
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		handleChatCompletions(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+	}
+
+	// override 开启：请求带任意 model → 一律替换为 llm-default
+	send("request-model-a")
+	if len(gotModels) != 1 || gotModels[0] != "llm-default" {
+		t.Fatalf("override on, with model: got = %v, want [llm-default]", gotModels)
+	}
+	// 请求无 model → 也补为 llm-default
+	send(nil)
+	if len(gotModels) != 2 || gotModels[1] != "llm-default" {
+		t.Fatalf("override on, no model: got = %v, want [llm-default llm-default]", gotModels)
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
+
 // TestForwardModelKeptForImage 验证带图请求：model 保留请求值，图片仍走 VLM 描述化后整体路由 LLM。
 func TestForwardModelKeptForImage(t *testing.T) {
 	var gotLLMModel string

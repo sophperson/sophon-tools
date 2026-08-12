@@ -1,8 +1,10 @@
 #!/bin/bash
 # pbmssm 统一构建接口 (M1 规范 v0.1)
-# 用法: bash release.sh [ARCH] [VERSION]
-#   ARCH:    arm64 | amd64 | all（默认 arm64）
-#   VERSION: 显式版本号（默认 2.1.0，与 build/version.sh 一致）
+# 用法: bash release.sh [ARCH] [VERSION] [REASONIX_BIN]
+#   ARCH:          arm64 | amd64 | all（默认 arm64）
+#   VERSION:       显式版本号（默认 2.1.0，与 build/version.sh 一致）
+#   REASONIX_BIN:  可选 reasonix arm64 二进制路径；与 build-deb-bmssm.sh 语义一致，
+#                  传入则把 Reasonix 一并打进 deb。
 #   env OUTPUT_DIR: 产物目录（默认 <repo>/output/pbmssm/）
 set -euo pipefail
 
@@ -11,6 +13,7 @@ cd "$SCRIPT_DIR"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ARCH="${1:-arm64}"
 VERSION="${2:-2.1.0}"
+REASONIX_BIN="${3:-${REASONIX_BIN:-}}"
 OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/output/pbmssm}"
 
 case "$ARCH" in
@@ -23,8 +26,8 @@ mkdir -p "$OUTPUT_DIR"
 
 build_one() {
   local arch="$1"
-  echo "==> pbmssm build arch=$arch version=$VERSION"
-  bash build/build-deb-bmssm.sh "$VERSION" "$arch"
+  echo "==> pbmssm build arch=$arch version=$VERSION reasonix=${REASONIX_BIN:-<none>}"
+  bash build/build-deb-bmssm.sh "$VERSION" "$arch" "$REASONIX_BIN"
   local deb="release/bmssm_${VERSION}_${arch}.deb"
   if [ ! -f "$deb" ]; then
     echo "ERROR: 未找到产物 $deb" >&2

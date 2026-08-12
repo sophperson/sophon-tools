@@ -13,27 +13,30 @@ import "time"
 
 // ProviderConfig 单套上游模型配置（LLM / VLM 各一份）。
 type ProviderConfig struct {
-	ApiBase   string `json:"apiBase"`   // OpenAI 兼容 base，转发时拼 /chat/completions
-	ApiKey    string `json:"-"`         // 上游供应商 key（不输出）
-	ModelName string `json:"modelName"` // 目标模型名
-	Enabled   bool   `json:"enabled"`
+	ApiBase       string `json:"apiBase"`   // OpenAI 兼容 base，转发时拼 /chat/completions
+	ApiKey        string `json:"-"`         // 上游供应商 key（不输出）
+	ModelName     string `json:"modelName"` // 目标模型名（默认模型名称）
+	Enabled       bool   `json:"enabled"`
+	OverrideModel bool   `json:"overrideModel"` // 覆盖下游请求：转发时强制用默认模型名
 }
 
 // Config 数据库模型：LLM 转发配置（单例，ID 固定为 1）。
 // LLM/VLM 各自独立的上游配置；ForwardKey 是客户端调用代理的凭据（独立于上游 key）。
 type Config struct {
-	ID          uint      `gorm:"column:id;primary_key" json:"-"`
-	LLMApiBase  string    `gorm:"column:llm_api_base" json:"llmApiBase"`
-	LLMApiKey   string    `gorm:"column:llm_api_key" json:"-"`
-	LLMModel    string    `gorm:"column:llm_model" json:"llmModel"`
-	LLMEnabled  bool      `gorm:"column:llm_enabled" json:"llmEnabled"`
-	VLMApiBase  string    `gorm:"column:vlm_api_base" json:"vlmApiBase"`
-	VLMApiKey   string    `gorm:"column:vlm_api_key" json:"-"`
-	VLMModel    string    `gorm:"column:vlm_model" json:"vlmModel"`
-	VLMEnabled  bool      `gorm:"column:vlm_enabled" json:"vlmEnabled"`
-	ForwardKey  string    `gorm:"column:forward_key" json:"-"`
-	ForwardKeyWritten bool `gorm:"column:forward_key_written" json:"-"`
-	UpdatedAt   time.Time `gorm:"column:updated_at" json:"updatedAt"`
+	ID                uint      `gorm:"column:id;primary_key" json:"-"`
+	LLMApiBase        string    `gorm:"column:llm_api_base" json:"llmApiBase"`
+	LLMApiKey         string    `gorm:"column:llm_api_key" json:"-"`
+	LLMModel          string    `gorm:"column:llm_model" json:"llmModel"`
+	LLMEnabled        bool      `gorm:"column:llm_enabled" json:"llmEnabled"`
+	LLMOverride       bool      `gorm:"column:llm_override_model" json:"llmOverrideModel"`
+	VLMApiBase        string    `gorm:"column:vlm_api_base" json:"vlmApiBase"`
+	VLMApiKey         string    `gorm:"column:vlm_api_key" json:"-"`
+	VLMModel          string    `gorm:"column:vlm_model" json:"vlmModel"`
+	VLMEnabled        bool      `gorm:"column:vlm_enabled" json:"vlmEnabled"`
+	VLMOverride       bool      `gorm:"column:vlm_override_model" json:"vlmOverrideModel"`
+	ForwardKey        string    `gorm:"column:forward_key" json:"-"`
+	ForwardKeyWritten bool      `gorm:"column:forward_key_written" json:"-"`
+	UpdatedAt         time.Time `gorm:"column:updated_at" json:"updatedAt"`
 }
 
 // TableName 指定表名。
@@ -63,12 +66,12 @@ const (
 
 // LLM 返回 LLM 上游配置。
 func (c Config) LLM() ProviderConfig {
-	return ProviderConfig{ApiBase: c.LLMApiBase, ApiKey: c.LLMApiKey, ModelName: c.LLMModel, Enabled: c.LLMEnabled}
+	return ProviderConfig{ApiBase: c.LLMApiBase, ApiKey: c.LLMApiKey, ModelName: c.LLMModel, Enabled: c.LLMEnabled, OverrideModel: c.LLMOverride}
 }
 
 // VLM 返回 VLM 上游配置。
 func (c Config) VLM() ProviderConfig {
-	return ProviderConfig{ApiBase: c.VLMApiBase, ApiKey: c.VLMApiKey, ModelName: c.VLMModel, Enabled: c.VLMEnabled}
+	return ProviderConfig{ApiBase: c.VLMApiBase, ApiKey: c.VLMApiKey, ModelName: c.VLMModel, Enabled: c.VLMEnabled, OverrideModel: c.VLMOverride}
 }
 
 // Provider 按类型取上游配置。
@@ -86,10 +89,12 @@ type SaveRequest struct {
 	LLMApiKey   string `json:"llmApiKey"`
 	LLMModel    string `json:"llmModel"`
 	LLMEnabled  *bool  `json:"llmEnabled"`
+	LLMOverride *bool  `json:"llmOverrideModel"`
 	VLMApiBase  string `json:"vlmApiBase"`
 	VLMApiKey   string `json:"vlmApiKey"`
 	VLMModel    string `json:"vlmModel"`
 	VLMEnabled  *bool  `json:"vlmEnabled"`
+	VLMOverride *bool  `json:"vlmOverrideModel"`
 }
 
 // ConfigResponse 配置响应（各 key 脱敏为 hasKey 布尔；ForwardKey 明文返回供前端展示）。
@@ -97,10 +102,12 @@ type ConfigResponse struct {
 	LLMApiBase      string    `json:"llmApiBase"`
 	LLMModel        string    `json:"llmModel"`
 	LLMEnabled      bool      `json:"llmEnabled"`
+	LLMOverride     bool      `json:"llmOverrideModel"`
 	LLMHasKey       bool      `json:"llmHasKey"`
 	VLMApiBase      string    `json:"vlmApiBase"`
 	VLMModel        string    `json:"vlmModel"`
 	VLMEnabled      bool      `json:"vlmEnabled"`
+	VLMOverride     bool      `json:"vlmOverrideModel"`
 	VLMHasKey       bool      `json:"vlmHasKey"`
 	ForwardKey      string    `json:"forwardKey"`
 	ForwardKeyReady bool      `json:"forwardKeyReady"` // 是否已写入本地 picoclaw

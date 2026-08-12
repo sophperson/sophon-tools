@@ -28,10 +28,12 @@ export interface AgentConfig {
   llmApiBase: string;
   llmModel: string;
   llmEnabled: boolean;
+  llmOverrideModel: boolean;
   llmHasKey: boolean;
   vlmApiBase: string;
   vlmModel: string;
   vlmEnabled: boolean;
+  vlmOverrideModel: boolean;
   vlmHasKey: boolean;
   forwardKey: string;
   forwardKeyReady: boolean;
@@ -58,10 +60,12 @@ export async function saveAgentConfig(cfg: {
   llmApiKey: string;
   llmModel: string;
   llmEnabled: boolean;
+  llmOverrideModel: boolean;
   vlmApiBase: string;
   vlmApiKey: string;
   vlmModel: string;
   vlmEnabled: boolean;
+  vlmOverrideModel: boolean;
 }): Promise<{ ok: boolean; message?: string }> {
   try {
     const res = await defHttp.put(
@@ -172,7 +176,7 @@ export interface ServiceStatus {
   logTail: string;
 }
 
-// 查询 sophpicoclaw 服务状态。
+// 查询 Reasonix（agentproxy 托管）服务状态。
 export async function getServiceStatus(): Promise<ServiceStatus | null> {
   try {
     const res = await defHttp.get<ServiceStatus>(
@@ -188,7 +192,7 @@ export async function getServiceStatus(): Promise<ServiceStatus | null> {
   }
 }
 
-// 对 sophpicoclaw 执行操作（start/stop/restart/enable/disable）。
+// 对 Reasonix（agentproxy 托管）执行操作（start/stop/restart）。
 export async function serviceAction(action: string): Promise<{ ok: boolean; message?: string }> {
   try {
     const res = await defHttp.post(
