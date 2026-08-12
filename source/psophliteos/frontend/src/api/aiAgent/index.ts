@@ -161,4 +161,48 @@ export async function testAgentConfig(): Promise<{ ok: boolean; data?: TestRespo
   }
 }
 
+export interface ServiceStatus {
+  active: boolean;
+  activeState: string;
+  subState: string;
+  enabledState: string;
+  mainPid: string;
+  ports: number[];
+  running: boolean;
+  logTail: string;
+}
+
+// 查询 sophpicoclaw 服务状态。
+export async function getServiceStatus(): Promise<ServiceStatus | null> {
+  try {
+    const res = await defHttp.get<ServiceStatus>(
+      { url: '/v1/llm-proxy/service/status' },
+      { isTransformResponse: false }
+    );
+    const data = (res as any)?.result ?? res;
+    return data && typeof data === 'object' && 'activeState' in data
+      ? (data as ServiceStatus)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+// 对 sophpicoclaw 执行操作（start/stop/restart/enable/disable）。
+export async function serviceAction(action: string): Promise<{ ok: boolean; message?: string }> {
+  try {
+    const res = await defHttp.post(
+      { url: '/v1/llm-proxy/service/action', data: { action } },
+      { isTransformResponse: false }
+    );
+    const data = (res as any)?.result ?? res;
+    if (data && typeof data === 'object' && data.message) {
+      return { ok: true, message: data.message };
+    }
+    return { ok: false, message: (res as any)?.error_message || '操作失败' };
+  } catch (e: any) {
+    return { ok: false, message: e?.message || '操作失败' };
+  }
+}
+
 export { Api as AgentConfigApi };

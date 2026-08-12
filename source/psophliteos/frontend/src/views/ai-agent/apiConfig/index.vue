@@ -148,8 +148,61 @@
           >
         </a-input-group>
         <div class="text-gray-400 text-xs mt-1">
-          重置会生成新 key；「写入本地」将覆盖 /home/linaro/.picoclaw/devproxy.key 并重启 picoclaw
+          重置会生成新 key；「写入本地」将覆盖 /opt/sophon/picoclaw/.picoclaw/devproxy.key 并重启 sophpicoclaw 服务
         </div>
+      </div>
+
+      <a-divider />
+
+      <!-- 服务监控与管理 -->
+      <div class="mt-4">
+        <div class="mb-2 flex items-center justify-between">
+          <span class="font-medium">服务管理（sophpicoclaw）</span>
+          <a-space>
+            <a-button size="small" :loading="svcLoading" @click="refreshService">刷新</a-button>
+          </a-space>
+        </div>
+        <a-card v-if="svc" size="small" class="max-w-2xl">
+          <a-descriptions :column="2" size="small">
+            <a-descriptions-item label="运行状态">
+              <a-tag :color="svc.active ? 'green' : 'red'">
+                {{ svc.active ? '运行中' : '已停止' }}
+              </a-tag>
+            </a-descriptions-item>
+            <a-descriptions-item label="开机自启">
+              <a-tag :color="svc.enabledState === 'enabled' ? 'green' : 'orange'">
+                {{ svc.enabledState === 'enabled' ? '已启用' : '未启用' }}
+              </a-tag>
+            </a-descriptions-item>
+            <a-descriptions-item label="状态">
+              {{ svc.activeState || '—' }} / {{ svc.subState || '—' }}
+            </a-descriptions-item>
+            <a-descriptions-item label="PID">{{ svc.mainPid || '—' }}</a-descriptions-item>
+            <a-descriptions-item label="端口">{{ svc.ports.join(', ') }}</a-descriptions-item>
+            <a-descriptions-item label="端口可达">
+              <a-tag :color="svc.running ? 'green' : 'red'">
+                {{ svc.running ? '是' : '否' }}
+              </a-tag>
+            </a-descriptions-item>
+          </a-descriptions>
+          <div class="mt-3">
+            <a-space>
+              <a-button size="small" type="primary" :loading="svcActing" @click="doServiceAction('restart')">重启</a-button>
+              <a-button size="small" :loading="svcActing" @click="doServiceAction('start')">启动</a-button>
+              <a-button size="small" danger :loading="svcActing" @click="doServiceAction('stop')">停止</a-button>
+              <a-button size="small" :loading="svcActing" @click="doServiceAction('enable')">启用自启</a-button>
+              <a-button size="small" :loading="svcActing" @click="doServiceAction('disable')">关闭自启</a-button>
+            </a-space>
+          </div>
+          <a-collapse class="mt-2" :bordered="false">
+            <a-collapse-panel key="log" header="最近日志">
+              <pre class="max-h-48 overflow-auto whitespace-pre-wrap text-xs text-gray-600">{{ svc.logTail || '暂无日志' }}</pre>
+            </a-collapse-panel>
+          </a-collapse>
+        </a-card>
+        <a-card v-else size="small" class="max-w-2xl">
+          <a-empty description="未获取到服务状态（sophpicoclaw 未安装或 bmssm 不可达）" />
+        </a-card>
       </div>
     </a-card>
 
@@ -197,6 +250,9 @@
     Modal,
     Select,
     Tag,
+    Descriptions,
+    Collapse,
+    Empty,
     message,
   } from 'ant-design-vue';
   import {
@@ -206,8 +262,11 @@
     resetForwardKey,
     writeForwardKeyToPicoclaw,
     testAgentConfig,
+    getServiceStatus,
+    serviceAction,
     type AgentConfig,
     type TestResult,
+    type ServiceStatus,
   } from '/@/api/aiAgent';
 
   const ACard = Card;
@@ -227,6 +286,11 @@
   const AModal = Modal;
   const ASelect = Select;
   const ATag = Tag;
+  const ADescriptions = Descriptions;
+  const ADescriptionsItem = Descriptions.Item;
+  const ACollapse = Collapse;
+  const ACollapsePanel = Collapse.Panel;
+  const AEmpty = Empty;
 
   const activeKey = ref('llm');
   const saving = ref(false);
@@ -235,6 +299,36 @@
   const testing = ref(false);
   const testResults = ref<TestResult[]>([]);
   const testAllOK = ref(true);
+
+  // sophpicoclaw 服务监控与管理
+  const svc = ref<ServiceStatus | null>(null);
+  const svcLoading = ref(false);
+  const svcActing = ref(false);
+
+  async function refreshService() {
+    svcLoading.value = true;
+    try {
+      svc.value = await getServiceStatus();
+    } finally {
+      svcLoading.value = false;
+    }
+  }
+
+  async function doServiceAction(action: string) {
+    if (svcActing.value) return;
+    svcActing.value = true;
+    try {
+      const res = await serviceAction(action);
+      if (res.ok) {
+        message.success(`操作成功：${action}`);
+      } else {
+        message.error(res.message || '操作失败');
+      }
+    } finally {
+      svcActing.value = false;
+    }
+    await refreshService();
+  }
 
   // API Base URL 预设
   const SOPHNET_API_BASE = 'https://www.sophnet.com/api/open-apis/v1';
@@ -445,7 +539,10 @@
     }
   }
 
-  onMounted(init);
+  onMounted(() => {
+    init();
+    refreshService();
+  });
 </script>
 
 <style lang="less" scoped>
