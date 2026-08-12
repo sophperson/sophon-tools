@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -401,6 +402,111 @@ func TestHubEventRouting(t *testing.T) {
 // TestWSMultiSession 多会话验证：
 //   - 同一连接连续发送两条消息 → 复用同一 ACP 会话（只创建一个 session/new）
 //   - 新连接发送 → 创建新的 ACP 会话（第二个 session/new）
+// sessionSummaries 从 session.list 帧提取摘要列表。
+func sessionSummaries(t *testing.T, conn *websocket.Conn) []map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		m := readFrame(t, conn)
+		if m["type"] != "session.list" {
+			continue
+		}
+		raw, ok := m["payload"].(map[string]any)["sessions"].([]any)
+		if !ok {
+			t.Fatalf("session.list payload.sessions not array: %v", m["payload"])
+		}
+		out := make([]map[string]any, 0, len(raw))
+		for _, item := range raw {
+			mm, ok := item.(map[string]any)
+			if !ok {
+				t.Fatalf("session.list item not object: %v", item)
+			}
+			out = append(out, mm)
+		}
+		return out
+	}
+	t.Fatal("no session.list frame received")
+	return nil
+}
+
+func TestWSSessionList(t *testing.T) {
+	mod, _ := mockModuleForWS(t)
+	h := newHub(mod, "key")
+	srv := httptest.NewServer(http.HandlerFunc(h.serveWS))
+	t.Cleanup(srv.Close)
+
+	// 预置两个服务端会话（直接写 SessionManager，不经过 ACP）
+	sm := mod.sessions
+	first := &WebchatSession{ID: "web-1", ACPSessionID: "acp-1", Title: "标题A", Messages: []ChatMessage{{Role: "user", Content: "hi"}}}
+	second := &WebchatSession{ID: "web-2", ACPSessionID: "acp-2", Title: "标题B", Messages: []ChatMessage{}}
+	sm.mu.Lock()
+	sm.sessions["web-1"] = first
+	sm.sessions["web-2"] = second
+	sm.mu.Unlock()
+
+	conn := dialWS(t, wsURL(srv.URL)+wsPath, "token.key")
+	_ = conn.WriteJSON(map[string]any{"type": "session.list"})
+
+	list := sessionSummaries(t, conn)
+	if len(list) != 2 {
+		t.Fatalf("session.list len = %d, want 2: %v", len(list), list)
+	}
+	found := map[string]bool{}
+	for _, s := range list {
+		found[s["id"].(string)] = true
+		if s["title"] == "标题A" && s["messageCount"].(float64) != 1 {
+			t.Errorf("标题A messageCount = %v, want 1", s["messageCount"])
+		}
+	}
+	if !found["web-1"] || !found["web-2"] {
+		t.Errorf("session.list missing ids: %v", list)
+	}
+}
+
+func TestWSSessionHistory(t *testing.T) {
+	mod, _ := mockModuleForWS(t)
+	h := newHub(mod, "key")
+	srv := httptest.NewServer(http.HandlerFunc(h.serveWS))
+	t.Cleanup(srv.Close)
+
+	sm := mod.sessions
+	sm.mu.Lock()
+	sm.sessions["web-9"] = &WebchatSession{
+		ID: "web-9", ACPSessionID: "acp-9", Title: "历史",
+		Messages: []ChatMessage{
+			{Role: "user", Content: "你好"},
+			{Role: "assistant", Kind: "text", Content: "很高兴", Model: "m1"},
+			{Role: "assistant", Kind: "thought", Content: "思考中"},
+		},
+	}
+	sm.mu.Unlock()
+
+	conn := dialWS(t, wsURL(srv.URL)+wsPath, "token.key")
+	_ = conn.WriteJSON(map[string]any{"type": "session.history", "session_id": "web-9"})
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		m := readFrame(t, conn)
+		if m["type"] != "session.history" {
+			continue
+		}
+		p := m["payload"].(map[string]any)
+		if p["session_id"] != "web-9" {
+			t.Fatalf("history echoed session_id = %v, want web-9", p["session_id"])
+		}
+		raw, _ := p["messages"].([]any)
+		if len(raw) != 3 {
+			t.Fatalf("history messages len = %d, want 3", len(raw))
+		}
+		msg1, _ := raw[1].(map[string]any)
+		if msg1["kind"] != "text" || msg1["content"] != "很高兴" {
+			t.Errorf("msg[1] = %v, want kind=text content=很高兴", msg1)
+		}
+		return
+	}
+	t.Fatal("no session.history frame received")
+}
+
 func TestWSMultiSession(t *testing.T) {
 	mod, tr := mockModuleForWS(t)
 	h := newHub(mod, "key")
@@ -467,5 +573,129 @@ func TestWSMultiSession(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&newCalls); got != 2 {
 		t.Errorf("session/new calls = %d, want 2 (connection1 reuses session, connection2 creates new)", got)
+	}
+}
+
+func TestWSPersistAssistantOnRoundEnd(t *testing.T) {
+	mod, tr := mockModuleForWS(t)
+	h := newHub(mod, "key")
+	srv := httptest.NewServer(http.HandlerFunc(h.serveWS))
+	t.Cleanup(srv.Close)
+	mod.SetEventFn(h.HandleEvent)
+	t.Cleanup(func() { mod.SetEventFn(nil) })
+
+	go func() {
+		sc := bufioNewScanner(tr.in)
+		req, err := tr.readRequestErr(sc)
+		if err != nil {
+			return
+		}
+		if req.Method != "session/new" {
+			t.Errorf("first = %s, want session/new", req.Method)
+		}
+		_ = tr.reply(map[string]any{"jsonrpc": "2.0", "id": *req.ID, "result": map[string]any{"sessionId": "acp-p1"}})
+		req2, err := tr.readRequestErr(sc)
+		if err != nil {
+			return
+		}
+		_ = tr.reply(map[string]any{
+			"jsonrpc": "2.0", "method": "session/update",
+			"params": map[string]any{"sessionId": "acp-p1", "update": map[string]any{"sessionUpdate": map[string]any{"agent_message_chunk": map[string]any{"messageId": "a1", "content": map[string]any{"text": "回答"}}}}},
+		})
+		_ = tr.reply(map[string]any{"jsonrpc": "2.0", "id": *req2.ID, "result": map[string]any{"stopReason": "end_turn"}})
+	}()
+
+	conn := dialWS(t, wsURL(srv.URL)+wsPath, "token.key")
+	_ = conn.WriteJSON(map[string]any{"type": "message.send", "payload": map[string]any{"content": "问题"}})
+	// 一直读到 typing.stop（round 结束）
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		m := readFrame(t, conn)
+		if m["type"] == "typing.stop" {
+			break
+		}
+	}
+	// round 落库后校验：Messages = [user问题, assistant回答]
+	waitFor(t, 3*time.Second, "assistant persisted", func() bool {
+		for _, s := range mod.sessions.List() {
+			if s.ACPSessionID == "acp-p1" && len(s.Messages) == 2 {
+				return s.Messages[1].Role == "assistant" && s.Messages[1].Content == "回答"
+			}
+		}
+		return false
+	})
+}
+
+func TestWSSendResumeExistingSession(t *testing.T) {
+	mod, tr := mockModuleForWS(t)
+	h := newHub(mod, "key")
+	srv := httptest.NewServer(http.HandlerFunc(h.serveWS))
+	t.Cleanup(srv.Close)
+	mod.SetEventFn(h.HandleEvent)
+	t.Cleanup(func() { mod.SetEventFn(nil) })
+
+	// 预置已有会话（含 ACP session id，state=closed 才会触发 resume）
+	sm := mod.sessions
+	sm.mu.Lock()
+	sm.sessions["web-r1"] = &WebchatSession{ID: "web-r1", ACPSessionID: "acp-r1", Title: "续聊", State: SessionClosed}
+	sm.mu.Unlock()
+
+	var mu sync.Mutex
+	var calls []string
+	go func() {
+		sc := bufioNewScanner(tr.in)
+		for {
+			req, err := tr.readRequestErr(sc)
+			if err != nil {
+				return
+			}
+			if req.ID == nil {
+				continue
+			}
+			mu.Lock()
+			calls = append(calls, req.Method)
+			mu.Unlock()
+			switch req.Method {
+			case "session/resume":
+				_ = tr.reply(map[string]any{"jsonrpc": "2.0", "id": *req.ID, "result": map[string]any{}})
+			case "session/prompt":
+				_ = tr.reply(map[string]any{"jsonrpc": "2.0", "id": *req.ID, "result": map[string]any{"stopReason": "end_turn"}})
+			default:
+				_ = tr.reply(map[string]any{"jsonrpc": "2.0", "id": *req.ID, "error": map[string]any{"code": -32601, "message": "Method not found"}})
+			}
+		}
+	}()
+
+	conn := dialWS(t, wsURL(srv.URL)+wsPath, "token.key")
+	// 携带 webchat id 发送 → 应 resume 而非 session/new
+	_ = conn.WriteJSON(map[string]any{"type": "message.send", "session_id": "web-r1", "payload": map[string]any{"content": "继续"}})
+
+	// 等待 prompt 发生
+	waitFor(t, 3*time.Second, "prompt called", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, m := range calls {
+			if m == "session/prompt" {
+				return true
+			}
+		}
+		return false
+	})
+	var sawNew, sawResume bool
+	mu.Lock()
+	for _, m := range calls {
+		if m == "session/new" {
+			sawNew = true
+		}
+		if m == "session/resume" {
+			sawResume = true
+		}
+	}
+	mu.Unlock()
+	if sawNew {
+		t.Error("unexpected session/new: existing webchat id should resume, not create")
+	}
+	if !sawResume {
+		t.Error("expected session/resume for existing webchat session")
 	}
 }

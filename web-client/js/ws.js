@@ -157,6 +157,26 @@
       return frame;
     }
 
+    /**
+     * 发送任意协议帧（如 session.list / session.history）。
+     * 仅用于无用户消息内容的控制帧；内容帧请用 send()。
+     * @param {object} frame 帧对象，如 { type: 'session.list' }
+     * @param {object} [opts] { queued: true } 连接未就绪时排队，就绪后自动发送
+     * @returns {boolean} 是否已发送（queued 时恒为 false）
+     */
+    sendFrame(frame, opts) {
+      var o = opts || {};
+      var value = JSON.stringify(frame);
+      if (this.ready && this.ws && this.ws.readyState === WebSocket.OPEN && !o.queued) {
+        this.ws.send(value);
+        return true;
+      }
+      if (o.queued) {
+        this._queue.push(JSON.parse(value));
+      }
+      return false;
+    }
+
     _flushQueue() {
       if (!this.ready || !this.ws) return;
       while (this._queue.length) {

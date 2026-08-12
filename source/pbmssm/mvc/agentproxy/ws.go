@@ -319,6 +319,10 @@ func (c *conn) handleFrame(frame clientFrame) {
 		c.handleSessionSwitchLocked(frame)
 	case "session.delete":
 		c.handleSessionDeleteLocked(frame)
+	case "session.list":
+		c.handleSessionListLocked()
+	case "session.history":
+		c.handleSessionHistoryLocked(frame)
 	case "session.cancel":
 		c.handleSessionCancelLocked()
 	case "session.new":
@@ -339,6 +343,31 @@ func (c *conn) handleMessageSendLocked(frame clientFrame) {
 	if content == "" {
 		return
 	}
+	// 携带已存在 webchat 会话 id → 先绑定并 resume 该会话（跨连接/跨浏览器续聊）
+	wid := frame.SessionID
+	if wid == "" {
+		if p, ok := frame.Payload["session_id"].(string); ok {
+			wid = p
+		}
+	}
+	if wid != "" {
+		if _, ok := c.module.Sessions().Get(wid); ok {
+			ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+			defer cancel()
+			client := c.module.Client()
+			if client == nil {
+				c.enqueueErrorLocked("reasonix 未就绪", "prompt")
+				return
+			}
+			sw, err := c.module.Sessions().Switch(ctx, client, wid)
+			if err != nil {
+				c.enqueueErrorLocked("恢复会话失败："+err.Error(), "session_resume")
+				return
+			}
+			c.resumeSessionLocked(sw)
+		}
+		// wid 存在但 Get 未命中 → 视为未知会话，落回新建分支（向后兼容）
+	}
 	if c.session == nil {
 		if err := c.ensureSessionLocked(); err != nil {
 			c.enqueueErrorLocked("无法创建会话："+err.Error(), "session_new")
@@ -350,6 +379,15 @@ func (c *conn) handleMessageSendLocked(frame clientFrame) {
 	if err := c.promptLocked(content); err != nil {
 		c.enqueueErrorLocked("发送失败："+err.Error(), "prompt")
 	}
+}
+
+// resumeSessionLocked 把连接绑定到已存在的 webchat 会话（resume 后绑定并注册事件路由）。
+// 前置：持 c.mu。
+func (c *conn) resumeSessionLocked(s *WebchatSession) {
+	c.bindSessionLocked(s)
+	c.hub.mu.Lock()
+	c.hub.byACP[s.ACPSessionID] = c
+	c.hub.mu.Unlock()
 }
 
 // ensureSessionLocked 确保连接已绑定 webchat 会话（首次发送时自动创建）。
@@ -415,7 +453,7 @@ func (c *conn) promptLocked(content string) error {
 	}
 	c.module.Sessions().AppendMessage(s.ID, ChatMessage{Role: "user", Content: content})
 
-	go func(acpID string, tok int64) {
+	go func(acpID string, tok int64, webchatID string) {
 		// 等待更新流关闭（prompt 响应 stopReason 到达）
 		for range updates {
 		}
@@ -427,10 +465,14 @@ func (c *conn) promptLocked(content string) error {
 				case c.send <- c.adapter.OnPromptEnd(c.session.ID):
 				case <-c.done:
 				}
+				// 回合结束：把本回合 assistant（text/thought/tool_calls）全量落库
+				for _, am := range c.adapter.RoundAssistants() {
+					c.module.Sessions().AppendMessage(webchatID, am)
+				}
 			}
 		}
 		c.mu.Unlock()
-	}(s.ACPSessionID, token)
+	}(s.ACPSessionID, token, s.ID)
 	return nil
 }
 
@@ -458,6 +500,54 @@ func (c *conn) handleSessionSwitchLocked(frame clientFrame) {
 		return
 	}
 	c.enqueueErrorLocked("切换会话需重新连接", "switch_reconnect")
+}
+
+// handleSessionListLocked session.list：返回服务端全部会话摘要（不含全量消息）。
+// 前置：持 c.mu。
+func (c *conn) handleSessionListLocked() {
+	summaries := make([]map[string]any, 0, 16)
+	for _, s := range c.module.Sessions().List() {
+		summaries = append(summaries, map[string]any{
+			"id":           s.ID,
+			"title":        s.Title,
+			"acpSessionId": s.ACPSessionID,
+			"updatedAt":    s.UpdatedAt,
+			"messageCount": len(s.Messages),
+		})
+	}
+	f := WSFrame{Type: "session.list", Payload: map[string]any{"sessions": summaries}}
+	select {
+	case c.send <- []WSFrame{f}:
+	case <-c.done:
+	}
+}
+
+// handleSessionHistoryLocked session.history：返回指定 webchat 会话的全量消息。
+// 前置：持 c.mu。
+func (c *conn) handleSessionHistoryLocked(frame clientFrame) {
+	sid := frame.SessionID
+	if sid == "" {
+		if p, ok := frame.Payload["session_id"].(string); ok {
+			sid = p
+		}
+	}
+	if sid == "" {
+		return
+	}
+	s, ok := c.module.Sessions().Get(sid)
+	if !ok {
+		c.enqueueErrorLocked("会话不存在", "session_not_found")
+		return
+	}
+	f := WSFrame{
+		Type:      "session.history",
+		SessionID: sid,
+		Payload:   map[string]any{"session_id": sid, "messages": s.Messages},
+	}
+	select {
+	case c.send <- []WSFrame{f}:
+	case <-c.done:
+	}
 }
 
 // handleSessionDeleteLocked 删除会话。前置：持 c.mu。

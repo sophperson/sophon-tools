@@ -213,19 +213,26 @@
   }
 
   /**
-   * 绑定服务端返回的 session_id 到发起请求的会话。
-   * 优先绑定到 pendingSendSessionId（发送时记录的会话），避免等待回复期间
-   * 切换会话导致绑定错乱。
+   * 绑定服务端返回的 webchat session_id 到本地会话（跨浏览器持久主键）。
+   * session.create 回传的 id 是服务端 agent_session 主键，跨设备一致；
+   * 用它替换本地临时 uuid，作为持久主键。
    */
   function bindServerSession(serverSessionId) {
     if (!serverSessionId) return;
     var targetId = state.pendingSendSessionId || state.activeId;
     var s = state.sessions.find(function (x) { return x.id === targetId; });
     if (!s) return;
-    if (s.serverSessionId === serverSessionId) return;
+    if (s.id !== serverSessionId) {
+      var idx = state.sessions.findIndex(function (x) { return x.id === s.id; });
+      if (idx >= 0) state.sessions[idx].id = serverSessionId;
+      if (state.activeId === s.id) state.activeId = serverSessionId;
+      s.id = serverSessionId;
+    }
     s.serverSessionId = serverSessionId;
     state.pendingSendSessionId = null;
     saveSessions();
+    saveActive();
+    renderSessionList();
   }
 
   /** 把一条消息追加到当前会话并持久化 */
@@ -553,6 +560,12 @@
       case 'typing.stop':
         hideTyping();
         break;
+      case 'session.list':
+        handleSessionList(payload);
+        break;
+      case 'session.history':
+        handleSessionHistory(payload);
+        break;
       case 'error':
         handleError(payload);
         break;
@@ -578,6 +591,87 @@
     scrollToBottom();
   }
 
+  // ---------- 服务端会话回读（跨浏览器/跨设备恢复） ----------
+
+  /** 连接就绪后拉取服务端会话列表，覆盖本地列表（跨设备恢复）。 */
+  function syncFromServer() {
+    if (!state.ws || !state.ws.ready) return;
+    state.ws.sendFrame({ type: 'session.list' }, { queued: true });
+  }
+
+  /** 主动拉取某会话的历史消息。 */
+  function pullHistory(sessionId) {
+    if (!state.ws || !state.ws.ready || !sessionId) return;
+    state.ws.sendFrame({ type: 'session.history', session_id: sessionId }, { queued: true });
+  }
+
+  /** session.list 下行：用服务端会话列表重建前端列表（本地未同步的新会话另起）。 */
+  function handleSessionList(payload) {
+    var serverList = payload && Array.isArray(payload.sessions) ? payload.sessions : [];
+    var byId = {};
+    state.sessions.forEach(function (s) { byId[s.id] = s; });
+
+    var stored = serverList.map(function (ss) {
+      var existing = byId[ss.id] || byId[ss.serverSessionId];
+      if (existing) {
+        existing.serverSessionId = ss.id;
+        if (existing.id !== ss.id) existing.id = ss.id;
+        if (!existing.loaded) existing.loaded = false;
+        // 用服务端 updatedAt 排序（若本地更旧则刷新 preview，消息稍后按需拉取）
+        existing.localTitle = existing.title;
+        existing.title = existing.title && existing.title !== '新会话' ? existing.title : (ss.title || '新会话');
+        return existing;
+      }
+      return {
+        id: ss.id,
+        serverSessionId: ss.id,
+        title: ss.title || '新会话',
+        messages: [],
+        loaded: false
+      };
+    });
+
+    // 合并仍是本地的、但服务端还没有的（离线兜底 / 尚未同步的新会话）
+    var storedIds = {};
+    stored.forEach(function (s) { storedIds[s.id] = true; });
+    state.sessions.forEach(function (s) {
+      if (!storedIds[s.id]) stored.push(s);
+    });
+
+    state.sessions = stored;
+    if (!state.sessions.some(function (s) { return s.id === state.activeId; })) {
+      state.activeId = state.sessions.length ? state.sessions[0].id : null;
+    }
+    saveSessions();
+    saveActive();
+    renderSessionList();
+    renderChat();
+    // 活动会话若是服务端已有但未加载历史，立即拉取
+    var act = getActiveSession();
+    if (act && act.serverSessionId && !act.loaded) pullHistory(act.serverSessionId);
+  }
+
+  /** session.history 下行：回放服务端全量消息。 */
+  function handleSessionHistory(payload) {
+    var sid = payload.session_id;
+    var raw = Array.isArray(payload.messages) ? payload.messages : [];
+    var s = state.sessions.find(function (x) { return x.id === sid || x.serverSessionId === sid; });
+    if (!s) return;
+    s.messages = raw.map(function (m) {
+      return {
+        role: m.role,
+        kind: m.kind || 'text',
+        content: m.content || '',
+        model: m.model || '',
+        message_id: m.id || m.message_id || '',
+        time: null
+      };
+    });
+    s.loaded = true;
+    saveSessions();
+    if (state.activeId === s.id) renderChat();
+  }
+
   // ---------- 发送逻辑 ----------
 
   function sendMessage() {
@@ -600,13 +694,10 @@
       try {
         // 记录本次请求归属的会话，供回包绑定 serverSessionId
         state.pendingSendSessionId = s.id;
-        // 协议约束（实测）：服务端会话绑定连接生命周期——
-        //   空 sid → 复用/创建连接当前会话；带本连接已知 sid → 保持上下文；
-        //   带本连接未知 sid（含旧连接的 sid）→ 服务端沉默无响应。
-        // 因此：切换会话已重开连接（服务端「忘记」上一会话），统一用空 sid 发送。
-        //   连接内连续消息复用同一服务端会话 → 多轮上下文保持。
-        //   当前会话首次发送 → 服务端建独立会话并回传 sid。
-        state.ws.send('', content, mediaList);
+        // 携带服务端 webchat id 续聊（跨浏览器/跨设备恢复同一会话）；
+        // 未绑定服务端 id（新会话）时发空 sid，服务端自动建独立会话。
+        var sendId = s.serverSessionId ? s.serverSessionId : '';
+        state.ws.send(sendId, content, mediaList);
         state.sending = false;
         setSendEnabled(true);
       } catch (err) {
@@ -782,6 +873,11 @@
 
     if (!s) return;
 
+    // 服务端已有但本端未加载历史的会话：拉取历史（跨设备首次打开某会话）
+    if (s.serverSessionId && !s.loaded) {
+      pullHistory(s.serverSessionId);
+    }
+
     // 重放会话历史
     s.messages.forEach(function (msg) {
       if (msg.role === 'user') {
@@ -836,6 +932,8 @@
       closed: '已断开'
     };
     sub.textContent = map[status.state] || status.state;
+    // 连接就绪后从服务端回读会话列表（跨浏览器/跨设备恢复）
+    if (status.state === 'open') syncFromServer();
   }
 
   // ---------- 初始化 ----------

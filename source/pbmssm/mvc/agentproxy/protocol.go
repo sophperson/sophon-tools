@@ -28,12 +28,18 @@ type ToolCallState struct {
 	Status string `json:"status,omitempty"`
 }
 
+// streamedContent 一条流式消息（text/thought）的聚合状态，含渲染 kind。
+type streamedContent struct {
+	Kind string // text / thought
+	Text string
+}
+
 // StreamState 连接级流式累积状态：一个 WS 连接一个实例。
 // 同一 messageId 的内容按 ACP chunk 增量累积，发送全量（前端 accumulate 前缀替换语义）。
 type StreamState struct {
 	mu        sync.Mutex
 	created   map[string]bool            // messageId / toolCallId -> 已发 message.create
-	content   map[string]string          // messageId -> 当前完整内容
+	content   map[string]streamedContent // messageId -> 当前完整内容（含 kind）
 	toolCalls map[string]*ToolCallState  // toolCallId -> 聚合
 	typingOn  bool                       // 当前回合是否仍显示「输入中…」
 }
@@ -42,7 +48,7 @@ type StreamState struct {
 func NewStreamState() *StreamState {
 	return &StreamState{
 		created:   make(map[string]bool),
-		content:   make(map[string]string),
+		content:   make(map[string]streamedContent),
 		toolCalls: make(map[string]*ToolCallState),
 		typingOn:  true,
 	}
@@ -141,8 +147,18 @@ func (a *MessageAdapter) messageChunk(ev *ACPSessionUpdate, webchatID, kind stri
 	a.mu.Unlock()
 
 	a.state.mu.Lock()
-	cur := a.state.content[id] + ev.Content
-	a.state.content[id] = cur
+	sc := a.state.content[id]
+	var merged string
+	if sc.Kind == "" {
+		// 首个 chunk：记 kind（text/thought），内容即本段
+		sc.Kind = kind
+		merged = ev.Content
+	} else {
+		// 后续 chunk：增量累积
+		merged = sc.Text + ev.Content
+	}
+	sc.Text = merged
+	a.state.content[id] = sc
 	already := a.state.created[id]
 	a.state.created[id] = true
 	typing := a.state.typingOn
@@ -159,7 +175,7 @@ func (a *MessageAdapter) messageChunk(ev *ACPSessionUpdate, webchatID, kind stri
 			SessionID: webchatID,
 			Payload: map[string]any{
 				"message_id": id,
-				"content":    cur,
+				"content":    merged,
 				"kind":       kind,
 				"model_name": a.modelName(),
 			},
@@ -170,7 +186,7 @@ func (a *MessageAdapter) messageChunk(ev *ACPSessionUpdate, webchatID, kind stri
 			SessionID: webchatID,
 			Payload: map[string]any{
 				"message_id": id,
-				"content":    cur,
+				"content":    merged,
 				"kind":       kind,
 			},
 		})
@@ -242,6 +258,27 @@ func (a *MessageAdapter) toolCall(ev *ACPSessionUpdate, webchatID string, update
 		})
 	}
 	return frames
+}
+
+// RoundAssistants 返回本回合已聚合的 assistant 消息（落库用），并清空聚合状态后重开。
+// text/thought 按 messageId 归并全文，kind 保留；tool_call 按 toolCallId 归并为折叠块摘要。
+// 调用时机：回合结束（prompt stopReason 到达），由连接层追加进会话历史。
+func (a *MessageAdapter) RoundAssistants() []ChatMessage {
+	a.state.mu.Lock()
+	defer a.state.mu.Unlock()
+	out := make([]ChatMessage, 0, len(a.state.content)+len(a.state.toolCalls))
+	for id, sc := range a.state.content {
+		out = append(out, ChatMessage{Role: "assistant", Kind: sc.Kind, Content: sc.Text, ID: id})
+	}
+	for id, tc := range a.state.toolCalls {
+		out = append(out, ChatMessage{Role: "assistant", Kind: "tool_calls", Content: toolCallSummary(tc), ID: id})
+	}
+	// 清空聚合状态但保留同一把锁（不能整体替换 a.state——会换掉正在持有的 mutex）。
+	a.state.content = make(map[string]streamedContent)
+	a.state.toolCalls = make(map[string]*ToolCallState)
+	a.state.created = make(map[string]bool)
+	a.state.typingOn = true
+	return out
 }
 
 // modelName 返回 message.create 的 model_name。
