@@ -306,14 +306,29 @@ func TestSessionPromptStream(t *testing.T) {
 		t.Fatal("timeout waiting for stream event")
 	}
 
-	// updates 通道在响应到达后关闭
+	// updates 通道：既承载流式事件，又在响应到达后关闭（for range 消费到关闭）。
 	select {
-	case _, ok := <-updates:
-		if ok {
-			t.Fatal("updates should be closed after response")
+	case ev, ok := <-updates:
+		if !ok {
+			t.Fatal("updates closed before stream event")
+		}
+		if ev.Discriminator != "agent_message_chunk" || ev.MessageID != "m1" {
+			t.Fatalf("updates event = %+v", ev)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("timeout waiting for updates close")
+		t.Fatal("timeout waiting for updates event")
+	}
+	// 继续消费直到关闭（响应到达后 close）
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case _, ok := <-updates:
+			if !ok {
+				return
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for updates close")
+		}
 	}
 }
 

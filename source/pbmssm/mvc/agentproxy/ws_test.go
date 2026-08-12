@@ -1,0 +1,459 @@
+package agentproxy
+
+import (
+	"bufio"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
+)
+
+// startTestHub 启动一个测试 Hub（不绑定固定端口，用 httptest 服务器暴露）。
+// 返回 Hub、服务器 URL 与转发 key。
+func startTestHub(t *testing.T, module *Module, key string) *Hub {
+	t.Helper()
+	h := newHub(module, key)
+	// 手动注册事件回调（Start 里也会做；测试直接复用 serveWS）
+	module.SetEventFn(h.HandleEvent)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(wsPath, h.serveWS)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { h.Stop() })
+
+	t.Cleanup(func() {
+		// 恢复模块事件回调，避免影响其他测试
+		module.SetEventFn(nil)
+	})
+	return h
+}
+
+// wsURL 把 httptest http URL 转为 ws URL。
+func wsURL(u string) string {
+	return "ws" + strings.TrimPrefix(u, "http")
+}
+
+// dialWS 建立测试 WS 连接（带可选子协议）。
+func dialWS(t *testing.T, url, subproto string) *websocket.Conn {
+	t.Helper()
+	d := websocket.Dialer{}
+	if subproto != "" {
+		d.Subprotocols = []string{subproto}
+	}
+	conn, resp, err := d.Dial(url, nil)
+	if err != nil {
+		if resp != nil {
+			t.Fatalf("dial %s: %v (status %d)", url, err, resp.StatusCode)
+		}
+		t.Fatalf("dial %s: %v", url, err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	return conn
+}
+
+// readFrame 读一条 WS 帧并解析为 map。
+func readFrame(t *testing.T, conn *websocket.Conn) map[string]any {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, data, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read frame: %v", err)
+	}
+	var m map[string]any
+	if err := jsonUnmarshal(data, &m); err != nil {
+		t.Fatalf("parse frame %s: %v", string(data), err)
+	}
+	return m
+}
+
+func jsonUnmarshal(b []byte, v any) error {
+	return json.Unmarshal(b, v)
+}
+
+func bufioNewScanner(r io.Reader) *bufio.Scanner {
+	return bufio.NewScanner(r)
+}
+
+func TestWSAuthSubprotocol(t *testing.T) {
+	mod := NewModule(DefaultConfig(), nil, nil)
+	h := newHub(mod, "secret-key-123")
+	srv := httptest.NewServer(http.HandlerFunc(h.serveWS))
+	t.Cleanup(srv.Close)
+
+	// 正确子协议 → 升级成功
+	d := websocket.Dialer{Subprotocols: []string{"token.secret-key-123"}}
+	conn, resp, err := d.Dial(wsURL(srv.URL)+wsPath, nil)
+	if err != nil {
+		t.Fatalf("valid subproto dial failed: %v", err)
+	}
+	conn.Close()
+	_ = resp
+
+	// 错误子协议 → 403（无升级）
+	d2 := websocket.Dialer{Subprotocols: []string{"token.wrong"}}
+	_, resp2, err := d2.Dial(wsURL(srv.URL)+wsPath, nil)
+	if err == nil {
+		t.Fatal("wrong subproto should fail")
+	}
+	if resp2 == nil || resp2.StatusCode != http.StatusForbidden {
+		t.Fatalf("wrong subproto status = %v, want 403", resp2)
+	}
+
+	// 无子协议 → 403
+	d3 := websocket.Dialer{}
+	_, resp3, err := d3.Dial(wsURL(srv.URL)+wsPath, nil)
+	if err == nil {
+		t.Fatal("no subproto should fail")
+	}
+	if resp3 == nil || resp3.StatusCode != http.StatusForbidden {
+		t.Fatalf("no subproto status = %v, want 403", resp3)
+	}
+}
+
+func TestWSAuthEmptyKeyAllowsAll(t *testing.T) {
+	// key 为空 → 认证放行
+	mod := NewModule(DefaultConfig(), nil, nil)
+	h := newHub(mod, "")
+	srv := httptest.NewServer(http.HandlerFunc(h.serveWS))
+	t.Cleanup(srv.Close)
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(srv.URL)+wsPath, nil)
+	if err != nil {
+		t.Fatalf("empty key dial failed: %v", err)
+	}
+	conn.Close()
+}
+
+// mockModuleForWS 构造一个带 ACP client 的模块（Client() 可交互）。
+// client 的事件回调链到模块 dispatchEvent（与真实装配一致），
+// Hub 通过 SetEventFn 注入后事件可路由到连接。
+func mockModuleForWS(t *testing.T) (*Module, *stdIOTransport) {
+	t.Helper()
+	tr, pm := newStdIOTransport(t)
+	mod := &Module{
+		cfg:      Config{Enabled: true, Model: "test-model", Port: DefaultPort},
+		sessions: NewSessionManager(nil, t.TempDir()),
+		pm:       pm,
+		hub:      nil,
+	}
+	client := NewClient(pm, mod.dispatchEvent, mod.dispatchNotify)
+	mod.client = client
+	return mod, tr
+}
+
+// TestWSMessageSendStreaming 集成测试：
+// 客户端 WS 发送 message.send → 服务端调 ACP session/new + session/prompt →
+// mock 回 agent_message_chunk → WS 收到 message.create / message.update → typing.stop。
+func TestWSMessageSendStreaming(t *testing.T) {
+	mod, tr := mockModuleForWS(t)
+	h := newHub(mod, "key")
+	srv := httptest.NewServer(http.HandlerFunc(h.serveWS))
+	t.Cleanup(srv.Close)
+	mod.SetEventFn(h.HandleEvent)
+	t.Cleanup(func() { mod.SetEventFn(nil) })
+
+	// 构造 ACP 交互：session/new 返回 sid，prompt 流式返回。
+	go func() {
+		sc := bufioNewScanner(tr.in)
+		// 首次请求应为 session/new
+		req, err := tr.readRequestErr(sc)
+		if err != nil {
+			return
+		}
+		if req.Method != "session/new" {
+			t.Errorf("first request = %s, want session/new", req.Method)
+		}
+		_ = tr.reply(map[string]any{"jsonrpc": "2.0", "id": *req.ID, "result": map[string]any{"sessionId": "acp-1"}})
+
+		// 第二个请求：session/prompt
+		req2, err := tr.readRequestErr(sc)
+		if err != nil || req2.Method != "session/prompt" {
+			t.Errorf("second request = %v, want session/prompt", req2)
+			return
+		}
+		// 流式通知 + 响应
+		_ = tr.reply(map[string]any{
+			"jsonrpc": "2.0", "method": "session/update",
+			"params": map[string]any{
+				"sessionId": "acp-1",
+				"update":    map[string]any{"sessionUpdate": map[string]any{"agent_message_chunk": map[string]any{"messageId": "m1", "content": map[string]any{"text": "你好"}}}},
+			},
+		})
+		_ = tr.reply(map[string]any{"jsonrpc": "2.0", "id": *req2.ID, "result": map[string]any{"stopReason": "end_turn"}})
+	}()
+
+	conn := dialWS(t, wsURL(srv.URL)+wsPath, "token.key")
+
+	// 发送 message.send
+	_ = conn.WriteJSON(map[string]any{
+		"type": "message.send",
+		"payload": map[string]any{"content": "你好"},
+	})
+
+	// 期望收到：typing.start → message.create → message.update（或直接 create）→ typing.stop
+	var gotCreate, gotUpdate, gotTypingStop bool
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		m := readFrame(t, conn)
+		switch m["type"] {
+		case "typing.start":
+		case "message.create":
+			gotCreate = true
+			p := m["payload"].(map[string]any)
+			if p["kind"] != "text" {
+				t.Errorf("create kind = %v, want text", p["kind"])
+			}
+			if p["content"] != "你好" {
+				t.Errorf("create content = %v, want 你好", p["content"])
+			}
+			if p["message_id"] != "m1" {
+				t.Errorf("create message_id = %v, want m1", p["message_id"])
+			}
+		case "message.update":
+			gotUpdate = true
+		case "typing.stop":
+			gotTypingStop = true
+		}
+		if gotCreate && gotTypingStop {
+			break
+		}
+	}
+	if !gotCreate {
+		t.Fatal("no message.create received")
+	}
+	if !gotTypingStop {
+		t.Fatal("no typing.stop received")
+	}
+	_ = gotUpdate
+}
+
+// TestWSDisconnectCleansUp 断线清理：关闭连接后，事件不再投递给该连接。
+func TestWSDisconnectCleansUp(t *testing.T) {
+	mod, tr := mockModuleForWS(t)
+	h := newHub(mod, "key")
+	srv := httptest.NewServer(http.HandlerFunc(h.serveWS))
+	t.Cleanup(srv.Close)
+
+	go func() {
+		sc := bufioNewScanner(tr.in)
+		req, err := tr.readRequestErr(sc)
+		if err != nil {
+			return
+		}
+		_ = tr.reply(map[string]any{"jsonrpc": "2.0", "id": *req.ID, "result": map[string]any{"sessionId": "acp-1"}})
+	}()
+
+	conn := dialWS(t, wsURL(srv.URL)+wsPath, "token.key")
+	_ = conn.WriteJSON(map[string]any{"type": "message.send", "payload": map[string]any{"content": "hi"}})
+
+	// 等会话创建完成
+	waitFor(t, 3*time.Second, "session created", func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return len(h.byACP) == 1
+	})
+
+	conn.Close()
+	// 等待清理
+	waitFor(t, 3*time.Second, "conn cleaned", func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return len(h.byACP) == 0
+	})
+}
+
+// TestWSNewSessionBinding 验证 session.new 帧类型绑定（首个 message.send 自动建会话）。
+func TestWSNewSessionBinding(t *testing.T) {
+	mod, tr := mockModuleForWS(t)
+	h := newHub(mod, "key")
+	srv := httptest.NewServer(http.HandlerFunc(h.serveWS))
+	t.Cleanup(srv.Close)
+
+	go func() {
+		sc := bufioNewScanner(tr.in)
+		req, err := tr.readRequestErr(sc)
+		if err != nil {
+			return
+		}
+		_ = tr.reply(map[string]any{"jsonrpc": "2.0", "id": *req.ID, "result": map[string]any{"sessionId": "acp-9"}})
+	}()
+
+	conn := dialWS(t, wsURL(srv.URL)+wsPath, "token.key")
+	_ = conn.WriteJSON(map[string]any{"type": "message.send", "payload": map[string]any{"content": "开始"}})
+
+	// 期望收到 typing.start 前有 session.create（绑定 webchat id）
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		m := readFrame(t, conn)
+		if m["type"] == "session.create" {
+			sid, _ := m["session_id"].(string)
+			if sid == "" {
+				t.Fatal("session.create without session_id")
+			}
+			return
+		}
+	}
+	t.Fatal("no session.create received")
+}
+
+// TestWSUnknownTypeIgnored 未知帧类型不导致连接关闭。
+func TestWSUnknownTypeIgnored(t *testing.T) {
+	mod, tr := mockModuleForWS(t)
+	h := newHub(mod, "key")
+	srv := httptest.NewServer(http.HandlerFunc(h.serveWS))
+	t.Cleanup(srv.Close)
+
+	go func() {
+		sc := bufioNewScanner(tr.in)
+		req, err := tr.readRequestErr(sc)
+		if err != nil {
+			return
+		}
+		_ = tr.reply(map[string]any{"jsonrpc": "2.0", "id": *req.ID, "result": map[string]any{"sessionId": "acp-ign"}})
+	}()
+
+	conn := dialWS(t, wsURL(srv.URL)+wsPath, "token.key")
+	_ = conn.WriteJSON(map[string]any{"type": "foo.bar", "payload": map[string]any{"x": 1}})
+
+	// 连接仍存活：发一个 session.new 应能收到 session.create
+	_ = conn.WriteJSON(map[string]any{"type": "session.new"})
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, data, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("connection should stay alive after unknown frame: %v", err)
+	}
+	if !strings.Contains(string(data), "session.create") {
+		t.Errorf("after session.new got %s, want session.create", string(data))
+	}
+}
+
+// TestHubEventRouting 验证 Hub 按 ACP sessionId 把事件路由到对应连接。
+func TestHubEventRouting(t *testing.T) {
+	mod, tr := mockModuleForWS(t)
+	h := newHub(mod, "key")
+	srv := httptest.NewServer(http.HandlerFunc(h.serveWS))
+	t.Cleanup(srv.Close)
+	mod.SetEventFn(h.HandleEvent)
+	t.Cleanup(func() { mod.SetEventFn(nil) })
+
+	go func() {
+		sc := bufioNewScanner(tr.in)
+		req, err := tr.readRequestErr(sc)
+		if err != nil {
+			return
+		}
+		_ = tr.reply(map[string]any{"jsonrpc": "2.0", "id": *req.ID, "result": map[string]any{"sessionId": "acp-route"}})
+	}()
+
+	conn := dialWS(t, wsURL(srv.URL)+wsPath, "token.key")
+	_ = conn.WriteJSON(map[string]any{"type": "message.send", "payload": map[string]any{"content": "hi"}})
+
+	// 等会话绑定
+	waitFor(t, 3*time.Second, "bind", func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return len(h.byACP) == 1
+	})
+
+	// 直接调 Hub.HandleEvent（模拟模块 dispatchEvent）
+	h.HandleEvent(&ACPSessionUpdate{
+		SessionID: "acp-route", Discriminator: "agent_message_chunk",
+		MessageID: "m1", Content: "路由成功",
+	})
+
+	deadline := time.Now().Add(3 * time.Second)
+	found := false
+	for time.Now().Before(deadline) {
+		m := readFrame(t, conn)
+		if m["type"] == "message.create" {
+			p := m["payload"].(map[string]any)
+			if p["content"] == "路由成功" {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatal("event not routed to connection")
+	}
+}
+
+// TestWSMultiSession 多会话验证：
+//   - 同一连接连续发送两条消息 → 复用同一 ACP 会话（只创建一个 session/new）
+//   - 新连接发送 → 创建新的 ACP 会话（第二个 session/new）
+func TestWSMultiSession(t *testing.T) {
+	mod, tr := mockModuleForWS(t)
+	h := newHub(mod, "key")
+	srv := httptest.NewServer(http.HandlerFunc(h.serveWS))
+	t.Cleanup(srv.Close)
+	mod.SetEventFn(h.HandleEvent)
+	t.Cleanup(func() { mod.SetEventFn(nil) })
+
+	var newCalls int32
+	go func() {
+		sc := bufioNewScanner(tr.in)
+		for {
+			req, err := tr.readRequestErr(sc)
+			if err != nil {
+				return
+			}
+			// notification（无 id，如 session/cancel）不回复
+			if req.ID == nil {
+				continue
+			}
+			switch req.Method {
+			case "session/new":
+				atomic.AddInt32(&newCalls, 1)
+				_ = tr.reply(map[string]any{"jsonrpc": "2.0", "id": *req.ID, "result": map[string]any{"sessionId": "acp-" + strconv.FormatInt(*req.ID, 10)}})
+			case "session/prompt":
+				// 静默返回 stopReason（无流式通知，避免事件路由干扰）
+				_ = tr.reply(map[string]any{"jsonrpc": "2.0", "id": *req.ID, "result": map[string]any{"stopReason": "end_turn"}})
+			default:
+				_ = tr.reply(map[string]any{"jsonrpc": "2.0", "id": *req.ID, "error": map[string]any{"code": -32601, "message": "Method not found"}})
+			}
+		}
+	}()
+
+	// 连接 1：两条连续消息
+	conn1 := dialWS(t, wsURL(srv.URL)+wsPath, "token.key")
+	_ = conn1.WriteJSON(map[string]any{"type": "message.send", "payload": map[string]any{"content": "第一条"}})
+	// 等 session.create
+	waitFrame := func(t *testing.T, conn *websocket.Conn, wantType string) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			m := readFrame(t, conn)
+			if m["type"] == wantType {
+				return
+			}
+		}
+		t.Fatalf("no %s frame", wantType)
+	}
+	waitFrame(t, conn1, "session.create")
+	waitFrame(t, conn1, "typing.start")
+
+	_ = conn1.WriteJSON(map[string]any{"type": "message.send", "payload": map[string]any{"content": "第二条"}})
+	waitFrame(t, conn1, "typing.start")
+
+	// 连接 2：新会话
+	conn2 := dialWS(t, wsURL(srv.URL)+wsPath, "token.key")
+	_ = conn2.WriteJSON(map[string]any{"type": "message.send", "payload": map[string]any{"content": "新连接"}})
+	waitFrame(t, conn2, "session.create")
+
+	// 等待所有 session/new 处理完
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && atomic.LoadInt32(&newCalls) < 2 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := atomic.LoadInt32(&newCalls); got != 2 {
+		t.Errorf("session/new calls = %d, want 2 (connection1 reuses session, connection2 creates new)", got)
+	}
+}
