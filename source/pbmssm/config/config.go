@@ -95,6 +95,16 @@ func LoadFromDir(dir string) bool {
 	v.SetDefault("llm-proxy.port", 18080)
 	v.SetDefault("llm-proxy.listenIP", "127.0.0.1")
 
+	// Reasonix ACP 适配器（agentproxy）：进程管理 + ACP 客户端 + 会话。
+	// enabled 默认 false：reasonix 二进制未部署时不自动拉进程（T5 部署后再开）。
+	v.SetDefault("agentproxy.enabled", false)
+	v.SetDefault("agentproxy.listenIP", "127.0.0.1")
+	v.SetDefault("agentproxy.port", 18990)
+	v.SetDefault("agentproxy.binaryPath", "")
+	v.SetDefault("agentproxy.workDir", "/home/linaro")
+	v.SetDefault("agentproxy.model", "")
+	v.SetDefault("agentproxy.restartBackoffMax", "30s")
+
 	v.AddConfigPath(dir)
 	v.SetConfigName("bmssm")
 	v.SetConfigType("yaml")
