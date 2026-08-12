@@ -95,7 +95,10 @@ func TestWSAuthSubprotocol(t *testing.T) {
 		t.Fatalf("valid subproto dial failed: %v", err)
 	}
 	conn.Close()
-	_ = resp
+	// 浏览器强制要求服务端回显所选子协议，否则握手失败。
+	if got := resp.Header.Get("Sec-Websocket-Protocol"); got != "token.secret-key-123" {
+		t.Fatalf("echoed subproto = %q, want token.secret-key-123", got)
+	}
 
 	// 错误子协议 → 403（无升级）
 	d2 := websocket.Dialer{Subprotocols: []string{"token.wrong"}}

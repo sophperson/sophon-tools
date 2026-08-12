@@ -194,6 +194,10 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 		ReadBufferSize:  4096,
 		WriteBufferSize: 4096,
 		CheckOrigin:     func(r *http.Request) bool { return true },
+		// 回显客户端请求的子协议（token.<key>），浏览器强制要求服务端回显
+		// Sec-WebSocket-Protocol，否则握手失败。认证在 authSubprotocol 已通过，
+		// 这里直接把客户端列表透传给 selectSubprotocol 以回显首项。
+		Subprotocols: websocket.Subprotocols(r),
 	}
 	wsConn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
