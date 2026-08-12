@@ -12,7 +12,7 @@ func TestNewMetricsRegistry(t *testing.T) {
 	t.Cleanup(func() {
 		prometheus.Unregister(r.NumDevices)
 		for _, g := range []prometheus.Collector{
-			r.SystemMemoryTotal, r.SystemMemoryUsed, r.SystemMemoryFree,
+			r.SystemMemoryTotal, r.SystemMemoryUsed, r.SystemMemoryFree, r.SystemMemoryAvailable,
 			r.VppMemoryTotal, r.VppMemoryUsed,
 			r.VpuMemoryTotal, r.VpuMemoryUsed,
 			r.TpuMemoryTotal, r.TpuMemoryUsed,
@@ -45,7 +45,7 @@ func TestMetricsRegistryUpdateAndReset(t *testing.T) {
 	t.Cleanup(func() {
 		prometheus.Unregister(r.NumDevices)
 		for _, g := range []prometheus.Collector{
-			r.SystemMemoryTotal, r.SystemMemoryUsed, r.SystemMemoryFree,
+			r.SystemMemoryTotal, r.SystemMemoryUsed, r.SystemMemoryFree, r.SystemMemoryAvailable,
 			r.VppMemoryTotal, r.VppMemoryUsed,
 			r.VpuMemoryTotal, r.VpuMemoryUsed,
 			r.TpuMemoryTotal, r.TpuMemoryUsed,
@@ -64,9 +64,10 @@ func TestMetricsRegistryUpdateAndReset(t *testing.T) {
 		ChipType: "BM1684", BoardType: "0x10",
 	}
 	hw := &HardwareMetrics{
-		SystemMemoryTotal: 8 * 1024 * 1024 * 1024,
-		SystemMemoryUsed:  4 * 1024 * 1024 * 1024,
-		SystemMemoryFree:  4 * 1024 * 1024 * 1024,
+		SystemMemoryTotal:     8 * 1024 * 1024 * 1024,
+		SystemMemoryUsed:      4 * 1024 * 1024 * 1024,
+		SystemMemoryFree:      4 * 1024 * 1024 * 1024,
+		SystemMemoryAvailable: 4 * 1024 * 1024 * 1024,
 		CPUUsage:          42,
 		TPUUsage:          75,
 		TPUAvgUsage:       70,

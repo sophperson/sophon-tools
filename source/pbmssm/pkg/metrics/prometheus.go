@@ -27,14 +27,15 @@ func labelsForDevice(d DeviceLabels) []string {
 type MetricsRegistry struct {
 	NumDevices prometheus.Gauge
 
-	SystemMemoryTotal *prometheus.GaugeVec
-	SystemMemoryUsed  *prometheus.GaugeVec
-	SystemMemoryFree  *prometheus.GaugeVec
-	VppMemoryTotal    *prometheus.GaugeVec
-	VppMemoryUsed     *prometheus.GaugeVec
-	VpuMemoryTotal    *prometheus.GaugeVec
-	VpuMemoryUsed     *prometheus.GaugeVec
-	TpuMemoryTotal    *prometheus.GaugeVec
+	SystemMemoryTotal     *prometheus.GaugeVec
+	SystemMemoryUsed      *prometheus.GaugeVec
+	SystemMemoryFree      *prometheus.GaugeVec
+	SystemMemoryAvailable *prometheus.GaugeVec
+	VppMemoryTotal        *prometheus.GaugeVec
+	VppMemoryUsed         *prometheus.GaugeVec
+	VpuMemoryTotal        *prometheus.GaugeVec
+	VpuMemoryUsed         *prometheus.GaugeVec
+	TpuMemoryTotal        *prometheus.GaugeVec
 	TpuMemoryUsed     *prometheus.GaugeVec
 	DeviceMemoryTotal *prometheus.GaugeVec
 	DeviceMemoryUsed  *prometheus.GaugeVec
@@ -66,14 +67,15 @@ func NewMetricsRegistry() *MetricsRegistry {
 			Help: "Number of TPU devices",
 		}),
 
-		SystemMemoryTotal: newGaugeVec("system_memory_total_bytes", "Total system memory in bytes"),
-		SystemMemoryUsed:  newGaugeVec("system_memory_used_bytes", "Used system memory in bytes"),
-		SystemMemoryFree:  newGaugeVec("system_memory_free_bytes", "Free system memory in bytes"),
-		VppMemoryTotal:    newGaugeVec("vpp_memory_total_bytes", "Total VPP memory in bytes"),
-		VppMemoryUsed:     newGaugeVec("vpp_memory_used_bytes", "Used VPP memory in bytes"),
-		VpuMemoryTotal:    newGaugeVec("vpu_memory_total_bytes", "Total VPU memory in bytes"),
-		VpuMemoryUsed:     newGaugeVec("vpu_memory_used_bytes", "Used VPU memory in bytes"),
-		TpuMemoryTotal:    newGaugeVec("tpu_memory_total_bytes", "Total TPU memory in bytes"),
+		SystemMemoryTotal:     newGaugeVec("system_memory_total_bytes", "Total system memory in bytes"),
+		SystemMemoryUsed:      newGaugeVec("system_memory_used_bytes", "Used system memory in bytes (total - available, buff/cache excluded)"),
+		SystemMemoryFree:      newGaugeVec("system_memory_free_bytes", "Free system memory in bytes"),
+		SystemMemoryAvailable: newGaugeVec("system_memory_available_bytes", "Available system memory in bytes"),
+		VppMemoryTotal:        newGaugeVec("vpp_memory_total_bytes", "Total VPP memory in bytes"),
+		VppMemoryUsed:         newGaugeVec("vpp_memory_used_bytes", "Used VPP memory in bytes"),
+		VpuMemoryTotal:        newGaugeVec("vpu_memory_total_bytes", "Total VPU memory in bytes"),
+		VpuMemoryUsed:         newGaugeVec("vpu_memory_used_bytes", "Used VPU memory in bytes"),
+		TpuMemoryTotal:        newGaugeVec("tpu_memory_total_bytes", "Total TPU memory in bytes"),
 		TpuMemoryUsed:     newGaugeVec("tpu_memory_used_bytes", "Used TPU memory in bytes"),
 		DeviceMemoryTotal: newGaugeVec("device_memory_total_bytes", "Total device memory in bytes"),
 		DeviceMemoryUsed:  newGaugeVec("device_memory_used_bytes", "Used device memory in bytes"),
@@ -102,7 +104,7 @@ func NewMetricsRegistry() *MetricsRegistry {
 
 	// Register all labeled gauges
 	for _, g := range []prometheus.Collector{
-		r.SystemMemoryTotal, r.SystemMemoryUsed, r.SystemMemoryFree,
+		r.SystemMemoryTotal, r.SystemMemoryUsed, r.SystemMemoryFree, r.SystemMemoryAvailable,
 		r.VppMemoryTotal, r.VppMemoryUsed,
 		r.VpuMemoryTotal, r.VpuMemoryUsed,
 		r.TpuMemoryTotal, r.TpuMemoryUsed,
@@ -140,6 +142,7 @@ func (r *MetricsRegistry) Update(hw *HardwareMetrics, dev DeviceLabels) {
 	setInt(r.SystemMemoryTotal, hw.SystemMemoryTotal)
 	setInt(r.SystemMemoryUsed, hw.SystemMemoryUsed)
 	setInt(r.SystemMemoryFree, hw.SystemMemoryFree)
+	setInt(r.SystemMemoryAvailable, hw.SystemMemoryAvailable)
 
 	// 设备内存
 	setInt(r.VppMemoryTotal, hw.VppMemoryTotal)
@@ -186,7 +189,7 @@ func (r *MetricsRegistry) SetDeviceCount(n int64) {
 func (r *MetricsRegistry) Reset() {
 	r.NumDevices.Set(0)
 	for _, g := range []*prometheus.GaugeVec{
-		r.SystemMemoryTotal, r.SystemMemoryUsed, r.SystemMemoryFree,
+		r.SystemMemoryTotal, r.SystemMemoryUsed, r.SystemMemoryFree, r.SystemMemoryAvailable,
 		r.VppMemoryTotal, r.VppMemoryUsed,
 		r.VpuMemoryTotal, r.VpuMemoryUsed,
 		r.TpuMemoryTotal, r.TpuMemoryUsed,
@@ -205,9 +208,10 @@ func (r *MetricsRegistry) Reset() {
 // 各字段含义对齐 Rust exporter 的 HardwareMetrics。
 type HardwareMetrics struct {
 	// 系统内存（bytes）
-	SystemMemoryTotal int64
-	SystemMemoryUsed  int64
-	SystemMemoryFree  int64
+	SystemMemoryTotal     int64
+	SystemMemoryUsed      int64
+	SystemMemoryFree      int64
+	SystemMemoryAvailable int64
 
 	// 设备内存（bytes）
 	VppMemoryTotal    int64
@@ -285,7 +289,14 @@ func (c *Collector) CollectAll() *HardwareMetrics {
 
 	mem := c.Memory()
 	hw.SystemMemoryTotal = int64(mem.Total * 1024 * 1024)
-	hw.SystemMemoryUsed = int64((mem.Total - mem.Free) * 1024 * 1024)
+	// 已用 = total - available（buff/cache 可回收不计入，与使用率口径一致）；
+	// available 缺失时退化为 free。
+	memUsed := mem.Total - mem.Available
+	if mem.Available <= 0 {
+		memUsed = mem.Total - mem.Free
+	}
+	hw.SystemMemoryUsed = int64(memUsed * 1024 * 1024)
+	hw.SystemMemoryAvailable = int64(mem.Available * 1024 * 1024)
 	hw.SystemMemoryFree = int64(mem.Free * 1024 * 1024)
 
 	cpu := c.CPUInfo()

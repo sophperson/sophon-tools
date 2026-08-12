@@ -55,6 +55,45 @@ func TestMemoryPartialMissing(t *testing.T) {
 	}
 }
 
+// TestMemoryUsagePercentAvailable 使用率基于 MemAvailable（buff/cache 不计入）：
+// Total 6277 MB、Available 5781 MB → (6277-5781)/6277 = 7.90%。
+func TestMemoryUsagePercentAvailable(t *testing.T) {
+	fr := &fakeFileReader{files: map[string]string{
+		"/proc/meminfo": "MemTotal:       6427708 kB\n" +
+			"MemFree:        3672508 kB\n" +
+			"MemAvailable:   5920400 kB\n",
+	}}
+	c := NewCollector(fr, nil)
+	got := c.MemoryUsagePercent()
+	want := (6277.0 - 5781.0) / 6277.0 * 100.0 // ≈ 7.90
+	if got < want-0.1 || got > want+0.1 {
+		t.Errorf("MemoryUsagePercent = %v, want ~%v (available 口径)", got, want)
+	}
+}
+
+// TestMemoryUsagePercentFallbackFree MemAvailable 缺失时退化为 MemFree：
+// Total 2048 kB、Free 1024 kB → (2-1)/2 = 50%。
+func TestMemoryUsagePercentFallbackFree(t *testing.T) {
+	fr := &fakeFileReader{files: map[string]string{
+		"/proc/meminfo": "MemTotal:       2048 kB\nMemFree:        1024 kB\n",
+	}}
+	c := NewCollector(fr, nil)
+	got := c.MemoryUsagePercent()
+	want := 50.0
+	if got < want-0.01 || got > want+0.01 {
+		t.Errorf("MemoryUsagePercent = %v, want %v (free 回退)", got, want)
+	}
+}
+
+// TestMemoryUsagePercentMissing 无 meminfo 时返 0，不 panic。
+func TestMemoryUsagePercentMissing(t *testing.T) {
+	fr := &fakeFileReader{files: map[string]string{}}
+	c := NewCollector(fr, nil)
+	if got := c.MemoryUsagePercent(); got != 0 {
+		t.Errorf("MemoryUsagePercent = %v, want 0 when missing", got)
+	}
+}
+
 // ---------------------------------------------------------------
 // CPUInfo — cores/freq/type 来自 /proc/cpuinfo + scaling_cur_freq
 // 真值：8 核，2300000 kHz → 2300 MHz，model name bm1684x

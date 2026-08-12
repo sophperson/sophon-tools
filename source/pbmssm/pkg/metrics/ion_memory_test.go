@@ -225,15 +225,16 @@ func TestMemoryLayoutBM1684X(t *testing.T) {
 	if lay.ChipType != "bm1684x" {
 		t.Fatalf("ChipType = %q, want bm1684x", lay.ChipType)
 	}
-	// 系统：6277 MB total，used = 6277-3586(free) = 2691，使用率 ~42.88%
+	// 系统：6277 MB total，used = 6277-5781(available) = 496，使用率 ~7.90%
+	// （buff/cache 可回收不计入，available 口径）
 	if !approxEqual(lay.System.TotalMB, 6277, 1) {
 		t.Errorf("System.TotalMB = %v, want ~6277", lay.System.TotalMB)
 	}
-	if !approxEqual(lay.System.UsedMB, 2691, 1) {
-		t.Errorf("System.UsedMB = %v, want ~2691", lay.System.UsedMB)
+	if !approxEqual(lay.System.UsedMB, 496, 1) {
+		t.Errorf("System.UsedMB = %v, want ~496", lay.System.UsedMB)
 	}
-	if !approxEqual(lay.System.UsagePct, 42.88, 0.1) {
-		t.Errorf("System.UsagePct = %v, want ~42.88", lay.System.UsagePct)
+	if !approxEqual(lay.System.UsagePct, 7.90, 0.1) {
+		t.Errorf("System.UsagePct = %v, want ~7.90", lay.System.UsagePct)
 	}
 	// TPU：2531262464 B = 2414 MB 整；used 0
 	if !approxEqual(lay.TPU.TotalMB, 2414, 0.01) || !approxEqual(lay.TPU.UsagePct, 0, 0.01) {
