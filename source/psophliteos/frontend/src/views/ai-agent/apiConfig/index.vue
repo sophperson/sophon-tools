@@ -148,7 +148,7 @@
           >
         </a-input-group>
         <div class="text-gray-400 text-xs mt-1">
-          重置会生成新 key；「写入本地」将覆盖 /home/linaro/.picoclaw/devproxy.key 并重启 picoclaw
+          重置会生成新 key；「写入本地」将覆盖 /opt/sophon/picoclaw/.picoclaw/devproxy.key 并重启 sophpicoclaw 服务
         </div>
       </div>
 
@@ -307,18 +307,25 @@
 
   async function refreshService() {
     svcLoading.value = true;
-    svc.value = await getServiceStatus();
-    svcLoading.value = false;
+    try {
+      svc.value = await getServiceStatus();
+    } finally {
+      svcLoading.value = false;
+    }
   }
 
   async function doServiceAction(action: string) {
+    if (svcActing.value) return;
     svcActing.value = true;
-    const res = await serviceAction(action);
-    svcActing.value = false;
-    if (res.ok) {
-      message.success(`操作成功：${action}`);
-    } else {
-      message.error(res.message || '操作失败');
+    try {
+      const res = await serviceAction(action);
+      if (res.ok) {
+        message.success(`操作成功：${action}`);
+      } else {
+        message.error(res.message || '操作失败');
+      }
+    } finally {
+      svcActing.value = false;
     }
     await refreshService();
   }

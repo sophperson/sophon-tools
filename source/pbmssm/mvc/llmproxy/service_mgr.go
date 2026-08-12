@@ -70,6 +70,7 @@ func GetSophpicoclawStatus() (*ServiceStatus, error) {
 
 // ActionSophpicoclaw 对 sophpicoclaw 执行白名单操作（start/stop/restart/enable/disable）。
 // 仅允许操作 sophpicoclaw，经 systemd.Action 的 unit 白名单校验，杜绝注入。
+// 执行前先 daemon-reload，保证 unit 文件变更（升级/替换）即时生效。
 func ActionSophpicoclaw(action string) error {
 	allowed := map[string]bool{
 		"start": true, "stop": true, "restart": true,
@@ -81,7 +82,14 @@ func ActionSophpicoclaw(action string) error {
 	if err := sysdpkg.ValidateUnitName(sophpicoclawUnit); err != nil {
 		return err
 	}
-	return sysdpkg.Action(sophpicoclawUnit, action)
+	if err := sysdpkg.DaemonReload(); err != nil {
+		return fmt.Errorf("daemon-reload: %w", err)
+	}
+	if err := sysdpkg.Action(sophpicoclawUnit, action); err != nil {
+		// unit 未安装/未找到：systemd 退出码 5（Unit not found），给用户清晰提示
+		return fmt.Errorf("sophpicoclaw 服务操作失败（请确认已安装 sophpicoclaw）：%w", err)
+	}
+	return nil
 }
 
 // portUp 探测端口是否监听（短超时，不阻塞）。
