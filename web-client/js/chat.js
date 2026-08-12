@@ -29,11 +29,18 @@
     return null;
   }
 
+  /** 默认 Reasonix WS 地址：注入配置优先，否则当前主机 + 默认端口 */
+  function defaultReasonixWsUrl() {
+    var inj = injectedConfig();
+    if (inj && inj.wsUrl) return inj.wsUrl;
+    return 'ws://' + window.location.hostname + ':18990/agent/ws';
+  }
+
   function getSettings() {
     var inj = injectedConfig();
     var defaults = {
-      wsUrl: inj && inj.wsUrl ? inj.wsUrl : 'ws://' + window.location.hostname + ':18790/pico/ws',
-      token: inj ? inj.token : '',
+      wsUrl: defaultReasonixWsUrl(),
+      token: inj && inj.token ? inj.token : '',
       model: 'DeepSeek-V4-Flash-0731'
     };
     try {
@@ -642,6 +649,19 @@
 
   // ---------- 图片上传 UI ----------
 
+  /**
+   * 隐藏图片上传按钮并禁用图片发送（Reasonix 无 VLM 能力，T3 已确认
+   * promptCapabilities.image=false）。Reasonix 为唯一后端，按钮恒定隐藏，
+   * 且清空未提交的待发图片，避免用户消息夹带 media 字段。
+   */
+  function applyUploadVisibility() {
+    var btn = $(UPLOAD_BTN_SEL);
+    if (!btn) return;
+    btn.style.display = 'none';
+    state.pendingFiles = [];
+    clearPreview();
+  }
+
   function setupUpload() {
     var fileEl = document.createElement('input');
     fileEl.type = 'file';
@@ -652,8 +672,9 @@
     state.fileEl = fileEl;
     state.pendingFiles = [];
 
+    // 图片上传按钮点击不触发文件选择（Reasonix 无图片能力）
     $(UPLOAD_BTN_SEL).addEventListener('click', function () {
-      fileEl.click();
+      return;
     });
 
     fileEl.addEventListener('change', function () {
@@ -661,6 +682,9 @@
       renderPreview();
       fileEl.value = '';
     });
+
+    // 恒定隐藏上传按钮
+    applyUploadVisibility();
   }
 
   function renderPreview() {

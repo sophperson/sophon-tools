@@ -1,13 +1,13 @@
 /**
- * ws.js — AI Agent WebSocket 封装（T2）
+ * ws.js — AI Agent WebSocket 封装（T2，T4 改为仅连接 Reasonix 后端）
  *
  * 职责：
- *   - 建立 ws://<host>:18790/pico/ws 连接
- *   - 用子协议 token.<pico_token> 认证（浏览器无法设置 Header）
- *   - 发送 message.send / 接收 message.create / message.update / typing.* / error
+ *   - 建立 WebSocket 连接：Reasonix 后端 ws://<host>:<port>/agent/ws
+ *   - 用子协议 token.<forward_key> 认证（浏览器无法设置 Header，对齐 T3 agentproxy）
+ *   - 发送 message.send / 接收 message.create / message.update / typing.* / error / session.create
  *   - 断线自动重连（3s 退避）
  *
- * 对外暴露 PicoWS 类：
+ * 对外暴露 PicoWS 类（类名保留，兼容既有调用方）：
  *   const ws = new PicoWS({ url, token, onMessage, onStatus });
  *   ws.connect();
  *   ws.send(sessionId, content, media);
@@ -20,21 +20,36 @@
 
   var RECONNECT_DELAY = 3000;
 
+  // Reasonix agentproxy WS 端点（对齐 agentproxy-design.md §6.3）。
+  var REASONIX_DEFAULT_PORT = 18990;
+  var REASONIX_DEFAULT_WS_PATH = '/agent/ws';
+
   /**
-   * 部署层注入的开箱即用配置（T6）。
-   * 由 deploy-web-chat.sh 从测试机 ~/.picoclaw/.security.yml 读取 pico.settings.token
-   * 生成 /opt/sophon/web-chat/config.js：window.PICO_WEB_CHAT_CONFIG = { token, wsUrl }。
+   * 部署层注入的开箱即用配置（T6 / T4 更新）。
+   * 由 deploy 脚本生成 /opt/sophon/web-chat/config.js：
+   *   window.PICO_WEB_CHAT_CONFIG = {
+   *     wsUrl: "ws://host:18990/agent/ws",      // 可省略，回退当前主机默认端口
+   *     token: "<forward_key>"                  // 可省略，回退手动填写
+   *   }
    * 前端读不到时返回 null，回退为手动配置（向后兼容）。
    * 注意：config.js 仅存在于部署产物，不入仓库，避免把 token 明文写进源码。
    */
   function injectedConfig() {
     try {
       var c = window.PICO_WEB_CHAT_CONFIG;
-      if (c && typeof c === 'object' && c.token) {
-        return {
-          token: String(c.token),
-          wsUrl: (c.wsUrl && String(c.wsUrl)) || 'ws://' + window.location.hostname + ':18790/pico/ws'
-        };
+      if (c && typeof c === 'object') {
+        var cfg = {};
+        if (c.wsUrl) cfg.wsUrl = String(c.wsUrl);
+        if (c.token) cfg.token = String(c.token);
+        // 兼容旧格式（picoclaw 时代）：reasonix 段携带 host/port/token
+        if (c.reasonix && typeof c.reasonix === 'object') {
+          if (!cfg.wsUrl && c.reasonix.host) {
+            var port = c.reasonix.port ? String(c.reasonix.port) : String(REASONIX_DEFAULT_PORT);
+            cfg.wsUrl = 'ws://' + String(c.reasonix.host) + ':' + port + REASONIX_DEFAULT_WS_PATH;
+          }
+          if (!cfg.token && c.reasonix.token) cfg.token = String(c.reasonix.token);
+        }
+        if (cfg.wsUrl || cfg.token) return cfg;
       }
     } catch (e) { /* 忽略 */ }
     return null;
@@ -43,8 +58,8 @@
   class PicoWS {
     /**
      * @param {object} opts
-     * @param {string} opts.url      WebSocket 地址，如 ws://host:18790/pico/ws
-     * @param {string} opts.token    pico token
+     * @param {string} opts.url      WebSocket 地址，如 ws://host:18990/agent/ws
+     * @param {string} opts.token    子协议 token（Reasonix forward key）
      * @param {function} opts.onMessage  收到消息回调（已解析为对象）
      * @param {function} [opts.onStatus] 状态回调：{ state: 'connecting'|'open'|'reconnecting'|'closed', info? }
      */
@@ -195,4 +210,5 @@
   }
 
   window.PicoConfig = { injected: injectedConfig };
+  window.PicoConstants = { REASONIX_DEFAULT_PORT: REASONIX_DEFAULT_PORT, REASONIX_DEFAULT_WS_PATH: REASONIX_DEFAULT_WS_PATH };
 })();

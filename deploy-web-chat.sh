@@ -14,12 +14,13 @@
 #   · 不依赖独立 nginx 服务；配 sophliteos「AI Agent / Agent」页 iframe 内嵌
 #     （apply-ai-agent-webchat.sh --embedded）
 #
-# 开箱即用（MYS-149 S6T6，方案 a+c 组合，两种模式通用）：
-#   · 默认从测试机 ~/.picoclaw/.security.yml 读取 pico.settings.token，
-#     生成 <部署根>/config.js（window.PICO_WEB_CHAT_CONFIG = { token, wsUrl }）。
-#     前端页面加载即自动带上 token 连接，用户零配置即可对话。
-#   · config.js 仅存在于部署产物，不入仓库；token 不写进任何仓库文件。
-#   · 传 --no-token 可跳过注入（保留 T3 的手动填写模式，向后兼容）。
+# 开箱即用（T4 更新：Reasonix 唯一后端，MYS-169）：
+#   · 默认从测试机 bmssm sqlite（llm_proxy_config.forward_key）读取认证凭据，
+#     生成 <部署根>/config.js（window.PICO_WEB_CHAT_CONFIG = { token, wsUrl }），
+#     wsUrl 指向 Reasonix WS 端点 ws://<host>:18990/agent/ws（T3 agentproxy）。
+#     前端页面加载即自动带上 key 连接，用户零配置即可对话。
+#   · config.js 仅存在于部署产物，不入仓库；key 不写进任何仓库文件。
+#   · 传 --no-token 可跳过注入（保留手动填写模式，向后兼容）。
 #
 # 用法：
 #   bash deploy-web-chat.sh [--host <ssh-host>] [--user <ssh-user>] [--pass <ssh-pass>]
@@ -108,50 +109,28 @@ if [[ "$NO_TOKEN" -eq 1 ]]; then
   # 保留空 config.js（避免 404，前端按无注入处理）
   echo "window.PICO_WEB_CHAT_CONFIG = {};" > "$CONFIG_JS"
 else
-  # 远程读取 token：定位 .security.yml 中 pico 频道段的 token。
-  # 逐候选路径尝试远程 cat，输出经管道交 python3 精确解析 pico 段
-  # （避免误取其他频道同名 token，也规避远端引号转义）。
-  PY_EXTRACT="/tmp/web-chat-extract.$$.py"
-  cat > "$PY_EXTRACT" <<'PYEOF'
-import sys, re
-token = ""
-in_pico = False
-for line in sys.stdin:
-    s = line.rstrip("\n")
-    if re.match(r"^\s*pico:\s*$", s):
-        in_pico = True
-        continue
-    if in_pico:
-        m = re.match(r"^(\s*)([a-zA-Z0-9_-]+):\s*$", s)
-        if m and len(m.group(1)) == 0:
-            # 顶层键（下一个频道或其他顶层项）：离开 pico 段
-            break
-        m2 = re.match(r"^\s*token\s*:\s*(.+?)\s*$", s)
-        if m2:
-            token = m2.group(1).strip().strip("\"'")
-            break
-print(token, end="")
-PYEOF
-  TOKEN=$(run_remote '
-    for f in "$HOME/.picoclaw/.security.yml" /home/*/.picoclaw/.security.yml /opt/sophon/*/.security.yml; do
-      [ -f "$f" ] && { cat "$f"; exit 0; }
-    done
-    exit 1
-  ' | python3 "$PY_EXTRACT" || true)
-  rm -f "$PY_EXTRACT"
-  if [[ -z "$TOKEN" ]]; then
-    echo "  警告：未从测试机读取到 pico token（.security.yml 未找到或格式不符），跳过注入。" >&2
-    echo "  如确需注入，请检查 ~/.picoclaw/.security.yml 的 pico.settings.token，或改用 --no-token 明确手动模式。" >&2
+  # 远程读取认证凭据：Reasonix WS 端点复用 bmssm llm_proxy_config.forward_key
+  # （T3 agentproxy 子协议 token.<forward_key> 认证，与 pico 模式一致）。
+  # 测试机 bmssm 数据库固定 /var/lib/bmssm/bmssm.db；sshpass+sudo 执行 sqlite3 读取。
+  FORWARD_KEY=$(run_remote "
+    if command -v sqlite3 >/dev/null 2>&1; then
+      echo '$PASS' | sudo -S -p '' sqlite3 /var/lib/bmssm/bmssm.db \\
+        \"SELECT forward_key FROM llm_proxy_config WHERE id = 1;\" 2>/dev/null
+    fi
+  " | tr -d '\r' | tail -1 || true)
+  if [[ -z "$FORWARD_KEY" ]]; then
+    echo "  警告：未从测试机读取到 Reasonix forward_key（bmssm db 或 sqlite3 不可用），跳过注入。" >&2
+    echo "  如确需注入，请确认 bmssm llm_proxy_config.forward_key 已配置，或改用 --no-token 明确手动模式。" >&2
     echo "window.PICO_WEB_CHAT_CONFIG = {};" > "$CONFIG_JS"
   else
-    # 用 python3 生成合法 JS 字面量（token 可能含特殊字符）
-    PICO_TOKEN="$TOKEN" PICO_HOST="$HOST" python3 - > "$CONFIG_JS" <<'PYEOF'
+    # 用 python3 生成合法 JS 字面量（key 可能含特殊字符）
+    FORWARD_KEY="$FORWARD_KEY" PICO_HOST="$HOST" python3 - > "$CONFIG_JS" <<'PYEOF'
 import json, os
 host = os.environ["PICO_HOST"]
-ws_url = f"ws://{host}:18790/pico/ws"
-print(f"window.PICO_WEB_CHAT_CONFIG = {json.dumps({'token': os.environ['PICO_TOKEN'], 'wsUrl': ws_url}, ensure_ascii=False)};")
+ws_url = f"ws://{host}:18990/agent/ws"
+print(f"window.PICO_WEB_CHAT_CONFIG = {json.dumps({'token': os.environ['FORWARD_KEY'], 'wsUrl': ws_url}, ensure_ascii=False)};")
 PYEOF
-    echo "  已读取 pico token，生成 config.js（ws 地址自动使用当前主机 ${HOST}）"
+    echo "  已读取 Reasonix forward_key，生成 config.js（ws 地址自动使用当前主机 ${HOST}:18990/agent/ws）"
   fi
 fi
 "${SCP[@]}" "$CONFIG_JS" "$USER@$HOST":/tmp/web-chat-config.js >/dev/null
