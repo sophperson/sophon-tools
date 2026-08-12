@@ -1,0 +1,38 @@
+# Reasonix 定制实例（bmssm agentproxy 托管）— SE7 技术支持 Agent 配置
+# HOME=/data/sophon/reasonix-home，与系统正常安装 reasonix 的 ~/.reasonix 隔离。
+config_version = 6
+default_model = "sophnet"
+
+[[providers]]
+name        = "sophnet"
+kind        = "openai"
+base_url    = "http://127.0.0.1:18080/v1"
+model       = "DeepSeek-V4-Flash-0731"
+api_key_env = "DEEPSEEK_API_KEY"
+reasoning_protocol = "openai"
+context_window = 131072
+
+[tools]
+enabled = []   # empty = all built-in tools
+bash_timeout_seconds = 120
+
+[skills]
+# 预载 se7 知识库 skill（se7-knowledge-base/SKILL.md）
+paths = ["/data/sophon/reasonix-home/skills"]
+
+[permissions]
+mode  = "auto"   # 普通写/bash 自动放行（工作目录内少打扰）；嵌套/敏感/deny 仍拦截
+
+[sandbox]
+bash    = "off"   # 本机无 bubblewrap：须关 bash 系统沙箱才能 unconfined shell（平台要求）
+network = true
+# 不配 workspace_root/allow_write/forbid_read：不做路径圈地（用户选择）
+
+[agent]
+# SE7 技术支持助手设定（"agent 设定"，见同 home 下 prompts/system.md）
+system_prompt_file = "/data/sophon/reasonix-home/prompts/system.md"
+temperature        = 0.0
+
+[environment]
+enabled = true
+offline = false
