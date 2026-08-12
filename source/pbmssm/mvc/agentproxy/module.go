@@ -27,6 +27,7 @@ type Module struct {
 	nextID    int64
 	listeners map[int64]func(*ACPSessionUpdate) // 流式事件监听者（Hub 注册，广播分发）
 	turns     map[string]*Turn                  // acpSessionID → 进行中的回合（连接无关）
+	perms     map[int64]*pendingPermission     // reqID → 待审批请求（连接无关）
 
 	stopOnce sync.Once
 }
@@ -71,6 +72,7 @@ func NewModule(cfg Config, db *gorm.DB, eventFn func(*ACPSessionUpdate)) *Module
 		db:        db,
 		listeners: make(map[int64]func(*ACPSessionUpdate)),
 		turns:     make(map[string]*Turn),
+		perms:     make(map[int64]*pendingPermission),
 	}
 	if eventFn != nil {
 		m.listeners[m.nextID] = eventFn
@@ -119,6 +121,8 @@ func (m *Module) Shutdown() {
 		if m.hub != nil {
 			m.hub.Stop()
 		}
+		// 清空待审批（模块关闭，定时器/应答都不再需要）
+		m.clearPendingPermissions()
 		m.mu.Lock()
 		client := m.client
 		m.mu.Unlock()
@@ -237,6 +241,9 @@ func (m *Module) onProcessReady() {
 	m.client = NewClient(m.pm, m.dispatchEvent, m.dispatchNotify)
 	m.mu.Unlock()
 
+	// reasonix 进程已重建：旧 stream 上待审批的权限请求已失效，直接清空（防悬挂定时器）。
+	m.clearPendingPermissions()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -259,9 +266,14 @@ func (m *Module) onProcessReady() {
 	}
 }
 
-// dispatchNotify 收到未识别下行通知/agent 请求。
-// 当前仅记日志；S3 协议层可扩展（permission.request 等）。
-func (m *Module) dispatchNotify(method string, params json.RawMessage) {
+// dispatchNotify 收到未识别下行通知/agent 发起的 request。
+// reqID 非 nil 表示是 agent 发起的 request（如 session/request_permission），
+// host 必须按 reqID 回 JSON-RPC 响应，否则 agent 永久等待。
+func (m *Module) dispatchNotify(method string, params json.RawMessage, reqID *int64) {
+	if method == "session/request_permission" && reqID != nil {
+		m.dispatchPermissionRequest(*reqID, params)
+		return
+	}
 	logger.Info("agentproxy: downlink notify %s", method)
 }
 
