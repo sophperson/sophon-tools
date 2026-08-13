@@ -10,6 +10,7 @@ import (
 	"github.com/jinzhu/gorm"
 
 	"bmssm/logger"
+	"bmssm/mvc/llmproxy"
 )
 
 // Module 是 agentproxy 适配器的顶层装配：进程管理 + ACP 客户端 + 会话管理 + WS 端点。
@@ -159,9 +160,11 @@ func (m *Module) Process() *ProcessManager {
 }
 
 // SetEnabled 持久化并应用 enabled 状态：
-//   - true：启动 Reasonix 进程（若未运行）
-//   - false：停止 Reasonix 进程（手动停止，supervise 不再自愈）；WS 端点仍可连接，
-//     但发送会返回「reasonix 未就绪」错误帧。
+//   - true：启动 Reasonix 进程（若未运行），并联动确保 llm-proxy 转发 server 就绪
+//     （Reasonix 的 LLM 上游走本机 18080，须一起起，需求 MYS-212）。
+//   - false：停止 Reasonix 进程（手动停止，supervise 不再自愈），并联动停止
+//     llm-proxy 转发 server；WS 端点仍可连接，但发送会返回「reasonix 未就绪」错误帧。
+//
 // 供「启用」/服务管理开关调用。返回错误时进程状态可能未变更。
 func (m *Module) SetEnabled(enabled bool) error {
 	m.mu.Lock()
@@ -174,11 +177,19 @@ func (m *Module) SetEnabled(enabled bool) error {
 		if err := m.pm.Start(); err != nil {
 			return err
 		}
-		// 进程可能因手动停止处于 stopped；Start 会拉起。无需额外处理。
+		// 需求(MYS-212)：reasonix 与 llm-proxy 一起开 —— 启用 Agent 服务时确保
+		// LLM 上游转发 server 就绪，避免 reasonix 起来却打不通 LLM 一直转圈。
+		if err := llmproxy.SyncServerFromDB(m.db); err != nil {
+			logger.Warn("agentproxy: sync llm-proxy server failed: %v", err)
+		}
 		return nil
 	}
 	// 禁用：停止进程，保持停止（runRequested=false → supervise 不再重启）
 	m.pm.Stop()
+	// 需求(MYS-212)：与 llm-proxy 一起关。
+	if err := llmproxy.SyncServerFromDB(m.db); err != nil {
+		logger.Warn("agentproxy: sync llm-proxy server failed: %v", err)
+	}
 	return nil
 }
 

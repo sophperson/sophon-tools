@@ -16,6 +16,17 @@
             >
           </div>
         </a>
+        <a-form-item
+          label="启用 LLM 转发"
+          tooltip="控制 llm-proxy 转发服务：开启后保存并启动 18080 转发服务（Reasonix 经此访问上游 LLM）；关闭则停用转发。"
+        >
+          <div class="flex items-center gap-2">
+            <a-switch v-model:checked="form.llmEnabled" @change="onEnabledChange" />
+            <a-tag :color="form.llmEnabled ? 'green' : 'red'">
+              {{ form.llmEnabled ? '已启用' : '未启用' }}
+            </a-tag>
+          </div>
+        </a-form-item>
         <a-form-item label="API Base URL">
           <a-select
             v-model:value="form.llmApiBaseType"
@@ -214,6 +225,27 @@
       form.llmOverrideModel = cfg.llmOverrideModel !== false;
       form.llmHasKey = !!cfg.llmHasKey;
     }
+  }
+
+  // llm-proxy 转发服务开关：切换即保存并立即生效（启动/停用 18080 转发服务）。
+  // Reasonix 依赖该转发链路访问上游 LLM；关闭后上游转发停用、对话不可用。
+  async function onEnabledChange(checked: boolean) {
+    saving.value = true;
+    const res = await saveAgentConfig({
+      llmApiBase: form.llmApiBase.trim() || SOPHNET_API_BASE,
+      llmApiKey: form.llmApiKey,
+      llmModel: form.llmModel.trim() || 'sophnet-deepseek',
+      llmEnabled: checked,
+      llmOverrideModel: form.llmOverrideModel,
+    });
+    saving.value = false;
+    if (res.ok) {
+      message.success(checked ? 'LLM 转发服务已启用' : 'LLM 转发服务已停用');
+    } else {
+      message.error(res.message || '切换失败');
+    }
+    form.llmApiKey = '';
+    form.llmHasKey = true;
   }
 
   async function handleSave() {
