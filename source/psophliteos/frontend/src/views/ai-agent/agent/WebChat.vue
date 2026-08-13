@@ -73,7 +73,7 @@
             <div
               v-show="m.open"
               class="webchat-collapse-body"
-              v-html="renderMarkdown(m.content)"
+              v-html="m.html"
             ></div>
           </div>
           <div v-else-if="m.kind === 'tool_calls'" class="webchat-collapse">
@@ -87,11 +87,11 @@
             <div
               v-show="m.open"
               class="webchat-collapse-body"
-              v-html="renderMarkdown(m.content)"
+              v-html="m.html"
             ></div>
           </div>
           <div v-else class="webchat-msg webchat-msg-assistant">
-            <div class="webchat-bubble" v-html="renderMarkdown(m.content)"></div>
+            <div class="webchat-bubble" v-html="m.html"></div>
           </div>
         </template>
         <div v-if="typing" class="webchat-msg webchat-msg-assistant">
@@ -138,9 +138,9 @@
 
 <script lang="ts" setup>
   // @ts-nocheck
-  import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue';
+  import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue';
   import { PicoWs, defaultReasonixWsUrl } from '/@/api/aiAgent/ws';
-  import { renderMarkdownToHtml as renderMarkdown } from './markdown';
+  import { renderMarkdownToHtml } from './markdown';
   import { getAgentConfig } from '/@/api/aiAgent';
 
   interface ChatMsg {
@@ -148,7 +148,10 @@
     role: 'user' | 'assistant';
     kind?: string;
     content: string;
+    html?: string;
     open?: boolean;
+    // 渲染竞态防护：每次异步渲染打上序号，仅最新序号落地结果
+    __renderSeq?: number;
     // 权限审批卡片字段
     permReqId?: number;
     permTitle?: string;
@@ -217,6 +220,49 @@
     return msgs.find((m) => m.kind === 'permission' && !m.permDone) || null;
   });
 
+  // 异步渲染 markdown → 安全 HTML。消息内容流式累积，用版本号避免旧结果的竞态覆盖。
+  let renderSeq = 0;
+  function renderMsgHtml(m: ChatMsg) {
+    const mark = ++renderSeq;
+    m.__renderSeq = mark;
+    const key = m.key;
+    const sessionId = activeSess.value?.id;
+    renderMarkdownToHtml(m.content)
+      .then((html) => {
+        // 仅当消息仍在当前会话、且无更新渲染时应用结果（避免竞态写回错误内容）
+        const stillActive =
+          key && sessionId && activeId.value === sessionId && activeSess.value?.messages.some((x) => x.key === key);
+        if (stillActive && m.__renderSeq === mark) {
+          m.html = html;
+          saveSessions();
+        }
+      })
+      .catch(() => {
+        /* renderMarkdownToHtml 内部已有兜底，无需处理 */
+      });
+  }
+  function bumpRender(m: ChatMsg) {
+    m.__renderSeq = 0;
+    renderMsgHtml(m);
+  }
+
+  // 消息内容流式变化时，对需要 markdown 渲染的 assistant 消息做防抖重渲染。
+  // 用深度 watch 覆盖所有内容变更入口（handleCreate/handleUpdate/历史恢复等），避免遗漏。
+  let renderTimer: ReturnType<typeof setTimeout> | null = null;
+  watch(
+    () => currentMessages.value.map((m) => m.key + ':' + m.content),
+    () => {
+      if (renderTimer) clearTimeout(renderTimer);
+      renderTimer = setTimeout(() => {
+        const msgs = currentMessages.value || [];
+        for (const m of msgs) {
+          // user/error/permission 内容不渲染 markdown；assistant 文本/思考/工具调用渲染
+          if (m.role === 'assistant' && m.kind !== 'permission' && m.content) bumpRender(m);
+        }
+      }, 150);
+    }
+  );
+
   function uuid(): string {
     if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
@@ -238,7 +284,15 @@
 
   function saveSessions() {
     try {
-      localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions.value));
+      // html / __renderSeq 是从 content 派生的渲染缓存，不持久化（向后兼容、避免存储膨胀）
+      const snap = sessions.value.map((s) => ({
+        ...s,
+        messages: s.messages.map((m) => {
+          const { html: _h, __renderSeq: _r, ...rest } = m as ChatMsg;
+          return rest;
+        }),
+      }));
+      localStorage.setItem(SESSIONS_KEY, JSON.stringify(snap));
     } catch (e) {
       /* ignore */
     }
@@ -798,6 +852,7 @@
       clearInterval(busyStallTimer);
       busyStallTimer = null;
     }
+    if (renderTimer) clearTimeout(renderTimer);
     if (ws) ws.close();
   });
 </script>
@@ -1010,6 +1065,127 @@
   .webchat-msg-error .webchat-bubble {
     background: #fff1f0;
     color: #ff4d4f;
+  }
+
+  /* ===== AI markdown 内容样式（MYS-206）：WindiCSS Preflight 重置了列表/表格，需补回 ===== */
+  .webchat-bubble,
+  .webchat-collapse-body {
+    overscroll-behavior: contain;
+  }
+  /* 列表点位与编号 */
+  .webchat-bubble ul,
+  .webchat-collapse-body ul {
+    list-style: disc;
+    padding-left: 1.5em;
+    margin: 0.5em 0;
+  }
+  .webchat-bubble ol,
+  .webchat-collapse-body ol {
+    list-style: decimal;
+    padding-left: 1.5em;
+    margin: 0.5em 0;
+  }
+  .webchat-bubble li,
+  .webchat-collapse-body li {
+    margin: 0.15em 0;
+  }
+  /* 表格格子线 */
+  .webchat-bubble table,
+  .webchat-collapse-body table {
+    border-collapse: collapse;
+    margin: 0.5em 0;
+    width: 100%;
+    display: block;
+    overflow-x: auto;
+  }
+  .webchat-bubble th,
+  .webchat-bubble td,
+  .webchat-collapse-body th,
+  .webchat-collapse-body td {
+    border: 1px solid #d9d9d9;
+    padding: 6px 10px;
+    text-align: left;
+  }
+  .webchat-bubble th,
+  .webchat-collapse-body th {
+    background: #f0f0f0;
+    font-weight: 600;
+  }
+  /* 标题 */
+  .webchat-bubble h1,
+  .webchat-collapse-body h1 {
+    font-size: 1.5em;
+    margin: 0.6em 0 0.4em;
+  }
+  .webchat-bubble h2,
+  .webchat-collapse-body h2 {
+    font-size: 1.3em;
+    margin: 0.6em 0 0.4em;
+  }
+  .webchat-bubble h3,
+  .webchat-collapse-body h3 {
+    font-size: 1.15em;
+    margin: 0.5em 0 0.35em;
+  }
+  .webchat-bubble h4,
+  .webchat-bubble h5,
+  .webchat-bubble h6,
+  .webchat-collapse-body h4,
+  .webchat-collapse-body h5,
+  .webchat-collapse-body h6 {
+    font-size: 1em;
+    margin: 0.5em 0 0.3em;
+  }
+  /* 段落 */
+  .webchat-bubble p,
+  .webchat-collapse-body p {
+    margin: 0.4em 0;
+  }
+  /* 代码块（代码高亮 / mermaid 回退共用） */
+  .webchat-bubble .webchat-codeblock,
+  .webchat-collapse-body .webchat-codeblock {
+    margin: 0.5em 0;
+    padding: 10px 12px;
+    background: #282c34;
+    color: #abb2bf;
+    border-radius: 6px;
+    font-size: 13px;
+    line-height: 1.5;
+    overflow-x: auto;
+  }
+  .webchat-bubble .webchat-codeblock code,
+  .webchat-collapse-body .webchat-codeblock code {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    white-space: pre;
+    word-break: normal;
+    background: transparent;
+  }
+  /* 行内代码 */
+  .webchat-bubble code:not(.webchat-codeblock code),
+  .webchat-collapse-body code:not(.webchat-codeblock code) {
+    background: rgba(27, 31, 35, 0.08);
+    padding: 0.15em 0.35em;
+    border-radius: 4px;
+    font-size: 0.9em;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  }
+  /* 引用 */
+  .webchat-bubble blockquote,
+  .webchat-collapse-body blockquote {
+    margin: 0.5em 0;
+    padding: 4px 12px;
+    border-left: 3px solid #d9d9d9;
+    color: #666;
+    background: rgba(0, 0, 0, 0.03);
+  }
+  /* mermaid 图表容器 */
+  .webchat-bubble .webchat-mermaid,
+  .webchat-collapse-body .webchat-mermaid {
+    margin: 0.5em 0;
+    overflow-x: auto;
+    background: #fff;
+    border-radius: 6px;
+    padding: 8px;
   }
 
   /* 权限审批卡片（需求 197：从消息区移到输入框上方，宽度与输入框对齐） */
