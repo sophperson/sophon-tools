@@ -56,7 +56,7 @@ llm-proxy:
 # enabled 默认 false：reasonix 二进制部署（T5 部署步骤）后置 true 再重启 bmssm。
 agentproxy:
   enabled: false                       # 总开关（reasonix 部署后置 true）
-  listenIP: 127.0.0.1                  # WS 服务绑定（S3 使用）
+  listenIP: 0.0.0.0                    # WS 服务绑定（S3 前端 ws://<host>:18990 直连）
   port: 18990                          # WS 端点端口（已核实空闲）
   binaryPath: ""                       # 空则探测 PATH（reasonix）
   workDir: /home/linaro                # 会话 cwd
