@@ -934,3 +934,36 @@ func TestDevproxyKeyPathPrefersOptSophon(t *testing.T) {
 		t.Fatalf("devproxyKeyPath = %q, want /opt/sophon/picoclaw/.picoclaw/devproxy.key", p)
 	}
 }
+
+// TestSyncServerFromDB 验证 Agent 服务启停联动 llm-proxy 转发 server 的入口：
+//   - nil db → 返回 error（不 panic）
+//   - LLM/VLM 全禁用 → 返回 nil，且 UpdateServer 判定 disabled、不启动转发 server
+//
+// 需求(MYS-212)：reasonix 与 llm-proxy 一起开/关。正常启动（enabled=true 且需绑
+// 端口 18080）的完整路径依赖真实运行环境（config.Conf / 端口），交由测试机集成验证。
+func TestSyncServerFromDB(t *testing.T) {
+	if err := SyncServerFromDB(nil); err == nil {
+		t.Error("SyncServerFromDB(nil) should return error")
+	}
+
+	db := setupTestDB(t)
+	defer db.Close()
+	off := false
+	_, err := NewService(db).SaveConfig(SaveRequest{
+		LLMApiBase: "http://x/v1", LLMApiKey: "k", LLMModel: "llm-m", LLMEnabled: &off,
+		VLMApiBase: "http://x/v1", VLMApiKey: "k", VLMModel: "vlm-m", VLMEnabled: &off,
+	})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if err := SyncServerFromDB(db); err != nil {
+		t.Fatalf("SyncServerFromDB(disabled) = %v, want nil", err)
+	}
+	// disabled → 转发 server 不应被启动
+	mu.RLock()
+	started := activeSrv != nil
+	mu.RUnlock()
+	if started {
+		t.Error("SyncServerFromDB(disabled) should not start llm-proxy server")
+	}
+}

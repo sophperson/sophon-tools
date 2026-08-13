@@ -121,6 +121,18 @@ func (s *Service) SetForwardKeyWritten() {
 	}
 }
 
+// SyncServerFromDB 依据库中 llm-proxy 配置同步转发 server（供 Agent 服务启停联动，
+// 需求 MYS-212）：LLM/VLM 任一启用则启动转发 server（18080），任一未启用则停止。
+// agentproxy 启用/禁用 reasonix 时调用，保证「reasonix 与 llm-proxy 一起开/关」。
+func SyncServerFromDB(db *gorm.DB) error {
+	if db == nil {
+		return errors.New("database unavailable")
+	}
+	cfg := NewService(db).LoadConfig()
+	UpdateServer(cfg)
+	return nil
+}
+
 // ForwardKeyWritten 查询转发 key 是否已写入本地 picoclaw。
 func (s *Service) ForwardKeyWritten() bool {
 	if s == nil || s.db == nil {
