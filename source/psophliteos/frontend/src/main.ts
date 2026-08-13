@@ -2,6 +2,9 @@ import 'virtual:windi-base.css';
 import 'virtual:windi-components.css';
 import '/@/design/index.less';
 import 'virtual:windi-utilities.css';
+// AI Agent 对话框 markdown：代码高亮主题 + 数学公式样式（MYS-206，二者均为 CSS 副作用）
+import 'highlight.js/styles/github.css';
+import 'katex/dist/katex.min.css';
 // Register icon sprite
 import 'virtual:svg-icons-register';
 import App from './App.vue';
