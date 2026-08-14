@@ -58,7 +58,16 @@
       </header>
 
       <div ref="messagesEl" class="webchat-messages" @scroll.passive="onMessagesScroll">
-        <template v-for="m in currentMessages" :key="m.key">
+        <!-- 懒加载：上翻到头时提示还有更早历史，可点此逐批加载（底部滚动锚定不跳动） -->
+        <button
+          v-if="hasMoreOlder"
+          class="webchat-load-older"
+          type="button"
+          :disabled="loadingOlder"
+          @click="loadOlder"
+          >{{ loadingOlder ? '加载中…' : '↥ 加载更早消息' }}</button
+        >
+        <template v-for="m in visibleMessages" :key="m.key">
           <div v-if="m.role === 'user'" class="webchat-msg webchat-msg-user">
             <div class="webchat-bubble">{{ m.content }}</div>
           </div>
@@ -260,6 +269,50 @@
   // 不在消息流里渲染成气泡（需求 2：允许/拒绝后不再出现空白气泡）。
   const rawMessages = computed(() => activeSess.value?.messages || []);
   const currentMessages = computed(() => rawMessages.value.filter((m) => m.kind !== 'permission'));
+  // ---------- 懒加载（长会话动态渲染）----------
+  // 长会话消息成百上千条，一次性全量渲染 DOM + markdown 会卡死。方案：只渲染
+  // 「尾部窗口」内的可见消息（默认最近 INITIAL_RENDER 条），用户上翻时逐批
+  // loadCount 增大、动态补载更早消息（滚动锚定，不跳动）；窗口外的历史保持原始
+  // 文本、不占 DOM、不渲染 markdown。既解决点开长会话卡顿，也解决初始 DOM 爆炸。
+  const INITIAL_RENDER = 40;
+  const LOAD_BATCH = 60;
+  // 从尾部向前渲染多少条。0 = 尚未初始化（新会话/未加载历史）。
+  const loadCount = ref(0);
+  const loadingOlder = ref(false);
+  // 可见窗口：始终锚定在消息尾部（slice 负索引），最新消息必然可见；
+  // 新的流式消息追加到尾部，窗口自动跟随，无需额外处理。
+  const visibleMessages = computed(() => {
+    const all = currentMessages.value;
+    if (!all.length) return all;
+    const n = Math.max(1, Math.min(loadCount.value || INITIAL_RENDER, all.length));
+    return all.slice(all.length - n);
+  });
+  // 是否还有更早历史未渲染（显示「加载更早消息」按钮；配合滚动到底部自动补载）。
+  const hasMoreOlder = computed(
+    () => (loadCount.value || INITIAL_RENDER) < currentMessages.value.length
+  );
+  // 切换/加载会话时重置渲染窗口：默认只渲染尾部 INITIAL_RENDER 条。
+  function resetRenderWindow() {
+    const total = currentMessages.value.length;
+    loadCount.value = Math.min(total, INITIAL_RENDER);
+  }
+  // 滚动事件：接近窗口顶部且有更早历史时，自动补载一批（滚动锚定保持位置不跳）。
+  function loadOlder() {
+    if (loadingOlder.value) return;
+    const el = messagesEl.value;
+    const prevHeight = el ? el.scrollHeight : 0;
+    const prevScrollTop = el ? el.scrollTop : 0;
+    const anchor = prevHeight - prevScrollTop; // 相对底部的距离（补载后保持不变）
+    const total = currentMessages.value.length;
+    if ((loadCount.value || INITIAL_RENDER) >= total) return; // 已全部渲染
+    loadingOlder.value = true;
+    loadCount.value = Math.min(total, (loadCount.value || INITIAL_RENDER) + LOAD_BATCH);
+    nextTick(() => {
+      if (el) el.scrollTop = Math.max(0, el.scrollHeight - anchor);
+      refreshScrollState();
+      loadingOlder.value = false;
+    });
+  }
   // 待处理的权限请求：取当前会话第一条未处理（permDone 为空）的 permission 消息。
   // 由消息状态派生，切换会话/允许/拒绝/回执后自动同步，与消息历史共享同一份 permDone。
   const pendingPerm = computed<ChatMsg | null>(() => {
@@ -336,11 +389,11 @@
   const msgContentSnapshot = (msgs: ChatMsg[]) =>
     msgs.map((m) => m.key + ':' + m.content).join('');
   watch(
-    () => msgContentSnapshot(currentMessages.value),
+    () => msgContentSnapshot(visibleMessages.value),
     (now, prev) => {
       if (renderTimer) clearTimeout(renderTimer);
       renderTimer = setTimeout(() => {
-        const msgs = currentMessages.value || [];
+        const msgs = visibleMessages.value || [];
         // 解析上一份 key:content 快照为 Map
         const prevMap = new Map<string, string>();
         if (prev) {
@@ -428,6 +481,7 @@
     draft.value = '';
     errorMsg.value = '';
     clearOpenThought();
+    resetRenderWindow(); // 懒加载：新会话为空，渲染窗口归零
     resetConnection();
     return s;
   }
@@ -437,6 +491,7 @@
     activeId.value = id;
     saveActive();
     clearOpenThought();
+    resetRenderWindow(); // 懒加载：切换会话时重置渲染窗口，只渲染尾部 INITIAL_RENDER 条
     resetConnection();
   }
 
@@ -990,6 +1045,7 @@
     restoreBusy(s.id, !!payload.running); // 需求 4：恢复 busy 时走一次性校准
     clearOpenThought();
     saveSessions();
+    resetRenderWindow(); // 懒加载：历史到达后只渲染尾部窗口，避免一次性渲染全部导致卡顿
     scrollToBottom();
   }
 
@@ -1108,6 +1164,11 @@
 
   function onMessagesScroll() {
     refreshScrollState();
+    // 懒加载：上翻接近窗口顶部且还有更早历史时，自动补载下一批（滚动锚定）。
+    const el = messagesEl.value;
+    if (el && hasMoreOlder.value && el.scrollTop <= 150) {
+      loadOlder();
+    }
   }
 
   // ---------- 连接 ----------
@@ -1342,6 +1403,28 @@
     overflow-y: auto;
     padding: 16px;
     position: relative; /* 供「跳到最底部」悬浮按钮定位 */
+  }
+
+  /* 懒加载：历史有更早内容时的「加载更早消息」按钮（置顶居中，浅色小按钮） */
+  .webchat-load-older {
+    display: block;
+    margin: 0 auto 12px;
+    border: 1px solid #d9d9d9;
+    background: #fafafa;
+    color: #666;
+    border-radius: 14px;
+    padding: 4px 14px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .webchat-load-older:hover {
+    border-color: #1a73e8;
+    color: #1a73e8;
+    background: #e8f0fe;
+  }
+  .webchat-load-older:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
 
   /* 需求(MYS-210)：上翻历史时出现的「跳到最底部」悬浮按钮 */
