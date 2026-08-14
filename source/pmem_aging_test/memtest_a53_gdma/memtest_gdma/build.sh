@@ -1,7 +1,7 @@
 #!/bin/bash
 
 CPU_MODEL=$(awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo)
-SOC_MODE_CPU_MODEL=("bm1684x" "bm1684" "bm1688" "cv186ah")
+SOC_MODE_CPU_MODEL=("bm1684x" "bm1684" "bm1688" "cv186ah" "cv84x6")
 WORK_MODE="PCIE"
 for element in "${SOC_MODE_CPU_MODEL[@]}"; do
     if [ "$element" == "$CPU_MODEL" ]; then
@@ -15,7 +15,7 @@ make clean
 if [[ "${WORK_MODE}" == "SOC" ]]; then
 	if [[ "${CPU_MODEL}" == "bm1684x" ]] || [[ "${CPU_MODEL}" == "bm1684" ]]; then
 		make USE_GDMA_WITH_CORE=0
-	elif [[ "${CPU_MODEL}" == "bm1688" ]] || [[ "${CPU_MODEL}" == "cv186ah" ]]; then
+	elif [[ "${CPU_MODEL}" == "bm1688" ]] || [[ "${CPU_MODEL}" == "cv186ah" ]] || [[ "${CPU_MODEL}" == "cv84x6" ]]; then
 		make USE_GDMA_WITH_CORE=1
 	fi
 else
