@@ -125,32 +125,46 @@
       <footer class="webchat-input-area">
         <div v-if="pendingPerm" class="webchat-msg webchat-msg-assistant">
           <div class="webchat-bubble webchat-perm">
-            <div class="webchat-perm-label">需要批准：<strong>{{ pendingPerm.permTitle }}</strong></div>
-            <div class="webchat-perm-hint">Agent 请求执行上述操作，是否允许？(60 秒未操作将自动拒绝)</div>
+            <div class="webchat-perm-label">需要确认：<strong>{{ pendingPerm.permTitle }}</strong></div>
+            <div class="webchat-perm-hint">{{ pendingPerm.isAsk ? '请选择一个选项' : 'Agent 请求执行上述操作，是否允许？(60 秒未操作将自动拒绝)' }}</div>
             <div class="webchat-perm-actions">
-              <button class="webchat-perm-btn webchat-perm-allow" type="button" @click="respondPermission(pendingPerm.permReqId, true, pendingPerm)">允许</button>
-              <button class="webchat-perm-btn webchat-perm-deny" type="button" @click="respondPermission(pendingPerm.permReqId, false, pendingPerm)">拒绝</button>
+              <template v-if="pendingPerm.isAsk">
+                <button
+                  v-for="opt in askChoices"
+                  :key="opt.optionId"
+                  class="webchat-perm-btn webchat-perm-allow"
+                  type="button"
+                  @click="respondPermissionOption(pendingPerm.permReqId, opt.optionId, pendingPerm)"
+                  >{{ opt.name }}</button
+                >
+                <button class="webchat-perm-btn webchat-perm-deny" type="button"
+                  @click="respondPermission(pendingPerm.permReqId, false, pendingPerm)">取消</button>
+              </template>
+              <template v-else>
+                <button class="webchat-perm-btn webchat-perm-allow" type="button" @click="respondPermission(pendingPerm.permReqId, true, pendingPerm)">允许</button>
+                <button class="webchat-perm-btn webchat-perm-deny" type="button" @click="respondPermission(pendingPerm.permReqId, false, pendingPerm)">拒绝</button>
+              </template>
             </div>
           </div>
         </div>
         <div class="webchat-input-box">
-          <!-- 需求(MYS-210)：输入框左侧 —— 自动审批开关 + 停止按钮 -->
+          <!-- 需求(MYS-210)：输入框左侧 —— 自动审批 + 停止，与发送按钮同风格（高亮表示开启） -->
           <div class="webchat-input-tools">
-            <label class="webchat-autoapprove" title="开启后，工具权限请求将自动允许（随本会话保存）">
-              <input
-                type="checkbox"
-                v-model="autoApproveOn"
-                @change="onAutoApproveChange"
-              />
-              <span>自动审批</span>
-            </label>
             <button
-              class="webchat-stop"
+              class="webchat-tool-btn"
+              :class="{ on: autoApproveOn }"
               type="button"
-              :disabled="!activeSess?.busy && !typing"
+              title="开启后，工具权限请求将自动允许（随本会话保存）；高亮=已开启"
+              @click="autoApproveOn = !autoApproveOn"
+              >自动审批</button
+            >
+            <button
+              v-if="activeSess?.busy || typing"
+              class="webchat-tool-btn"
+              type="button"
               title="停止当前回合"
               @click="stopAgent"
-              >■</button
+              >停止</button
             >
           </div>
           <textarea
@@ -195,6 +209,10 @@
     permReqId?: number;
     permTitle?: string;
     permDone?: boolean | null;
+    // ask 用户决策卡片（MYS-212）：后端 permission.request 附带 is_ask/options，
+    // isAsk=true 表示需用户在展示的选项中选择，permOptions 为可选项列表。
+    isAsk?: boolean;
+    permOptions?: { optionId: string; name: string; kind: string }[];
   }
 
   interface Session {
@@ -319,6 +337,11 @@
     const msgs = activeSess.value?.messages || [];
     return msgs.find((m) => m.kind === 'permission' && !m.permDone) || null;
   });
+  // MYS-212：ask 决策卡片可点的选项（排除 kind==='reject_once' 的选项，仅展示可选的决策）。
+  const askChoices = computed(() => {
+    const opts = pendingPerm.value?.permOptions || [];
+    return opts.filter((o) => o.kind !== 'reject_once');
+  });
 
   // 需求(MYS-210)：自动审批开关。绑定当前会话的 autoApprove 字段，
   // 随 Session 一起持久化（saveSessions / loadSessions），刷新或换浏览器后恢复、
@@ -333,11 +356,6 @@
       }
     },
   });
-
-  // 开关变更触发。
-  function onAutoApproveChange() {
-    // 无需额外处理：面板只是把 autoApproveOn 的状态落到 Session（见 computed setter）。
-  }
 
   // 需求(MYS-210)：停止当前回合。向服务端发 session.cancel（agentproxy ws.go 已支持
   // 该帧 → module.CancelTurn 取消在途回合），本地同步清 typing/busy，避免残留转圈。
@@ -588,15 +606,30 @@
     }
   }
 
-  /** permission.request：Agent 触发需用户批准的工具调用 → 在活跃会话插入审批卡片。 */
+  /** permission.request：Agent 触发需用户批准的工具调用 → 在活跃会话插入审批卡片。
+       MYS-212：payload 可能带 is_ask=true + options（ask 用户决策：Agent 请用户在
+       展示的选项中选择）。自动审批仅对普通命令审批自动放行；ask 用户决策始终弹卡
+       让用户选择（用户决策工具不能因自动审批被吞掉）。 */
   function handlePermissionRequest(sessionId: string | undefined, payload: any) {
     const reqId = payload?.request_id;
     const toolCall = payload?.tool_call || {};
     if (reqId == null) return;
     const s = ensureSession();
-    // 需求(MYS-210)：开启自动审批的会话 → 不渲染人审卡片，直接回「允许」，
-    // 让 agent 流程不间断。仍记录一条已处理（allow）的 permission 消息供历史可见。
-    if (s.autoApprove) {
+    const isAsk = !!payload?.is_ask;
+    const makePermMsg = (done: boolean | null) => ({
+      key: 'perm' + msgSeq++,
+      role: 'assistant',
+      kind: 'permission',
+      content: '',
+      permReqId: reqId,
+      permTitle: (toolCall.title as string) || '工具调用',
+      permDone: done,
+      open: false,
+      isAsk,
+      permOptions: Array.isArray(payload?.options) ? payload.options : [],
+    });
+    // 仅命令审批在自动审批下自动放行；ask 用户决策始终弹卡让用户选择。
+    if (s.autoApprove && !isAsk) {
       if (ws && ws.ready) {
         ws.sendFrame({
           type: 'permission.respond',
@@ -604,29 +637,11 @@
           payload: { session_id: s.id, request_id: reqId, allow: true },
         });
       }
-      s.messages.push({
-        key: 'perm' + msgSeq++,
-        role: 'assistant',
-        kind: 'permission',
-        content: '',
-        permReqId: reqId,
-        permTitle: (toolCall.title as string) || '工具调用',
-        permDone: true,
-        open: false,
-      });
+      s.messages.push(makePermMsg(true));
       saveSessions();
       return;
     }
-    s.messages.push({
-      key: 'perm' + msgSeq++,
-      role: 'assistant',
-      kind: 'permission',
-      content: '',
-      permReqId: reqId,
-      permTitle: (toolCall.title as string) || '工具调用',
-      permDone: null,
-      open: false,
-    });
+    s.messages.push(makePermMsg(null));
     saveSessions();
     scrollToBottom();
   }
@@ -642,6 +657,21 @@
       });
     }
     m.permDone = allow;
+    saveSessions();
+  }
+
+  /** MYS-212：ask 决策卡片 —— 用户点选某个选项 → 回传 permission.respond 带 option_id，
+        把用户选中的选项回吐给 reasonix（修复 ask「无响应」缺陷）。选中的决策视为已允许。 */
+  function respondPermissionOption(reqId: number, optionId: string, m: ChatMsg) {
+    const sid = activeSess.value?.id;
+    if (ws && ws.ready) {
+      ws.sendFrame({
+        type: 'permission.respond',
+        session_id: sid,
+        payload: { session_id: sid, request_id: reqId, allow: true, option_id: optionId },
+      });
+    }
+    m.permDone = true;
     saveSessions();
   }
 
@@ -1750,48 +1780,36 @@
     align-items: flex-end;
     gap: 8px;
   }
-  /* 需求(MYS-210)：输入框左侧工具区（自动审批开关 + 停止按钮） */
+  /* 需求(MYS-210)：输入框内左侧工具区（自动审批开关 + 停止，紧凑一行） */
   .webchat-input-tools {
     display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
-    flex-shrink: 0;
-    padding-bottom: 2px;
-  }
-  .webchat-autoapprove {
-    display: flex;
     align-items: center;
-    gap: 4px;
-    font-size: 12px;
-    color: #666;
-    white-space: nowrap;
-    cursor: pointer;
-    user-select: none;
+    gap: 6px;
+    flex-shrink: 0;
+    padding: 0 2px 2px 0;
   }
-  .webchat-autoapprove input {
-    accent-color: #1a73e8;
-    cursor: pointer;
-  }
-  .webchat-stop {
-    border: 1px solid #d9d9d9;
+  /* 自动审批 / 停止：与「发送」按钮同风格（蓝底白字圆角），小一号 */
+  .webchat-tool-btn {
+    border: 1px solid #1a73e8;
     background: #fff;
-    color: #666;
+    color: #1a73e8;
     border-radius: 6px;
-    font-size: 12px;
-    line-height: 1;
-    padding: 6px 10px;
+    padding: 6px 12px;
     cursor: pointer;
-    text-align: center;
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: nowrap;
   }
-  .webchat-stop:hover:not(:disabled) {
-    border-color: #ff4d4f;
-    color: #ff4d4f;
+  .webchat-tool-btn:hover {
+    background: #e8f0fe;
   }
-  .webchat-stop:disabled {
-    color: #ccc;
-    cursor: not-allowed;
-    background: #fafafa;
+  /* 自动审批开启 → 高亮（实心品牌蓝） */
+  .webchat-tool-btn.on {
+    background: #1a73e8;
+    color: #fff;
+  }
+  .webchat-tool-btn.on:hover {
+    background: #1663c5;
   }
   .webchat-input-box textarea {
     flex: 1;
