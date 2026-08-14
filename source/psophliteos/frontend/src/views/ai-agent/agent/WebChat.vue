@@ -743,19 +743,35 @@
     const content = payload.content || '';
 
     if (kind === 'text') {
-      // 连续 text 合并到最近一条 assistant 文本（修复拆泡）
+      // 连续 text 合并到同一条 assistant 文本气泡（修复拆泡）。
+      // reasonix 常把一句话拆成多个不同 message_id 的 text（text-1/text-2…），
+      // 期间还可能夹入 thought / tool_calls（内部思考、工具调用/审批）——这些不应把
+      // text 切成两泡。因此从后向前找「最近一条纯文本 assistant 气泡，二者之间没有
+      // user 消息」，把后续 text 续接到它上面；中间可跳过 thought/tool_calls。
       clearOpenThought();
       // 兜底1：最终答案内容开始输出即本地清 typing（需求：收到 text 首条置 false；
       // 服务端首 chunk 本应发 typing.stop，此处防丢包/切会话时序导致的残留）
       typing.value = false;
-      const last = s.messages[s.messages.length - 1];
-      if (
-        last &&
-        last.role === 'assistant' &&
-        !last.kind &&
-        !s.messages.some((m) => m.key === messageId)
-      ) {
-        last.content += content;
+      const me = messageId;
+      const existingById = me ? s.messages.find((m) => m.key === me) : null;
+      if (existingById && (existingById.kind === 'text' || !existingById.kind)) {
+        existingById.content = existingById.content + content;
+        return;
+      }
+      // 从后向前找最近的纯文本 assistant 气泡（可跳过中间的 thought/tool_calls），
+      // 只要中间没有 user 消息，就把本次 text 续接上去（保持同一气泡）。
+      let target: ChatMsg | null = null;
+      for (let i = s.messages.length - 1; i >= 0; i--) {
+        const m = s.messages[i];
+        if (m.role === 'user') break; // 遇 user：跨轮，不再回退合并
+        if (m.role === 'assistant' && !m.kind) {
+          target = m;
+          break; // 找到最近的纯 text 气泡
+        }
+        // thought / tool_calls：跳过继续向前找
+      }
+      if (target) {
+        target.content += content;
         return;
       }
       s.messages.push({
@@ -1018,10 +1034,11 @@
     const s = sessions.value.find((x) => x.id === sid);
     if (!s) return;
     // 需求(MYS-209)：后端一轮回答会按 message_id 拆成多条 message.create，落库后
-    // history 里会出现成段的相邻 text 小片段（agent 一条完整回答被切成 text-1..text-N）。
-    // 若逐条各自成泡会把「同一段连续输出」显示成一串碎气泡。故在加载历史时把
-    // 相邻的 assistant 纯文本（非 thought/tool_calls）累积合并为一个气泡；
-    // 遇 user / thought / tool_calls 则视为新气泡（正确开新泡，不跨逻辑段错误合并）。
+    // history 里会出现成段的相邻 text 小片段（agent 一条完整回答被切成 text-1..text-N），
+    // 且一句话中间可能夹 thought / tool_calls（内部思考、工具调用）。若这些把 text
+    // 切断成多泡，会把「同一条连续回答」显示成碎片。故加载历史时，把相邻的 assistant
+    // 纯文本合并；合并允许跳过中间的 thought/tool_calls（它们不阻断正文，只是正文中的
+    // 阶段动作），但遇 user 消息即止（不跨轮次合并）。thought/tool_calls 各自成泡。
     const serverMsgs: ChatMsg[] = [];
     for (const m of raw) {
       const role = m.role === 'user' ? 'user' : 'assistant';
@@ -1031,12 +1048,24 @@
       const isPlainText = role === 'assistant' && kind !== 'thought' && kind !== 'tool_calls';
       // 纯文本空内容无信息量（源是流式片段，可能为空白），跳过避免空泡
       if (isPlainText && !content) continue;
-      const prev = serverMsgs[serverMsgs.length - 1];
-      if (isPlainText && prev && prev.role === 'assistant' && !prev.kind) {
-        prev.content += content;
-      } else {
-        serverMsgs.push({ key: 'his' + msgSeq++, role, kind, content, open: false });
+      if (isPlainText) {
+        // 从后向前找 serverMsgs 里最近的纯文本 assistant 气泡（跳过中间的 thought/tool_calls）
+        let prevPlain: ChatMsg | null = null;
+        for (let i = serverMsgs.length - 1; i >= 0; i--) {
+          const pm = serverMsgs[i];
+          if (pm.role === 'user') break;
+          if (pm.role === 'assistant' && !pm.kind) {
+            prevPlain = pm;
+            break;
+          }
+          // thought/tool_calls 跳过
+        }
+        if (prevPlain) {
+          prevPlain.content += content;
+          continue;
+        }
       }
+      serverMsgs.push({ key: 'his' + msgSeq++, role, kind, content, open: false });
     }
     // 请求 3：以服务端历史为权威基线，并合并本地尚未同步到的消息（在途内容、权限审批记录），
     // 避免刷新/换浏览器后历史缺失；同内容按 role+kind+content 去重，防止重复。
