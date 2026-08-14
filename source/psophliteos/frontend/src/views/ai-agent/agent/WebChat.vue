@@ -193,6 +193,9 @@
     title: string;
     messages: ChatMsg[];
     busy?: boolean;
+    // 是否已绑定服务端会话 id（运行期派生态，不持久化）。
+    // 用于会话隔离：绑定后不再把本会话 id 篡改为任意入帧的 session_id。
+    serverBound?: boolean;
     // 需求(MYS-210)：自动审批开关，随会话保存（刷新/换浏览器后恢复）。
     autoApprove?: boolean;
   }
@@ -326,20 +329,34 @@
 
   // 消息内容流式变化时，对需要 markdown 渲染的 assistant 消息做防抖重渲染。
   // 用深度 watch 覆盖所有内容变更入口（handleCreate/handleUpdate/历史恢复等），避免遗漏。
+  // 性能优化（长会话卡顿）：watch 的 source 同时带出「上一份 key:content」映射，
+  // 重渲染只针对内容实际变化过的 assistant 消息——避免长会话下任何一点内容变化都
+  // 触发全量 markdown 重渲染（marked+DOMPurify+高亮+katex/mermaid 开销大）。
   let renderTimer: ReturnType<typeof setTimeout> | null = null;
+  const msgContentSnapshot = (msgs: ChatMsg[]) =>
+    msgs.map((m) => m.key + ':' + m.content).join('');
   watch(
-    () => currentMessages.value.map((m) => m.key + ':' + m.content),
-    () => {
+    () => msgContentSnapshot(currentMessages.value),
+    (now, prev) => {
       if (renderTimer) clearTimeout(renderTimer);
       renderTimer = setTimeout(() => {
         const msgs = currentMessages.value || [];
-        for (const m of msgs) {
-          // user/error/permission 内容不渲染 markdown；assistant 文本/思考/工具调用渲染
-          if (m.role === 'assistant' && m.kind !== 'permission' && m.content) {
-            // 旧持久化的工具调用可能是裸 JSON，渲染前规整为可读文本（幂等，自动修复历史）
-            if (m.kind === 'tool_calls') m.content = displayToolCalls(m.content);
-            bumpRender(m);
+        // 解析上一份 key:content 快照为 Map
+        const prevMap = new Map<string, string>();
+        if (prev) {
+          for (const line of prev.split('')) {
+            const i = line.indexOf(':');
+            if (i > 0) prevMap.set(line.slice(0, i), line.slice(i + 1));
           }
+        }
+        for (const m of msgs) {
+          if (m.role !== 'assistant' || m.kind === 'permission' || !m.content) continue;
+          // 旧持久化的工具调用可能是裸 JSON，渲染前规整为可读文本（幂等，自动修复历史）
+          if (m.kind === 'tool_calls') m.content = displayToolCalls(m.content);
+          // 内容未变且已有渲染结果 → 跳过（长会话历史不重复渲染，降低卡顿）
+          const prevContent = prevMap.get(m.key);
+          if (m.html && prevContent != null && prevContent === m.content) continue;
+          bumpRender(m);
         }
       }, 150);
       // 内容渲染后刷新消息区滚动状态
@@ -403,7 +420,7 @@
   }
 
   function newSession(): Session {
-    const s: Session = { id: uuid(), title: '新会话', messages: [], busy: false };
+    const s: Session = { id: uuid(), title: '新会话', messages: [], busy: false, serverBound: false };
     sessions.value.unshift(s);
     activeId.value = s.id;
     saveSessions();
@@ -424,6 +441,12 @@
   }
 
   function deleteSession(id: string) {
+    // 先同步到服务端真实删除（此前只做本地移除，重连后 session.list 会把服务端仍在的
+    // 会话拉回来 → 点击消失又复现）。后端 handleSessionDeleteLocked 会删除服务端会话
+    // 并解绑本连接对该会话的 byACP 订阅，此后重连 session.list 不再返回它。
+    if (ws && ws.ready) {
+      ws.sendFrame({ type: 'session.delete', session_id: id, payload: { session_id: id } });
+    }
     sessions.value = sessions.value.filter((s) => s.id !== id);
     if (activeId.value === id) {
       activeId.value = sessions.value.length ? sessions.value[0].id : '';
@@ -439,6 +462,16 @@
   }
 
   // ---------- WS ----------
+  // 内容类帧（消息、审批、回合终态）：仅当帧属于当前展示会话时才写入聊天区渲染，
+  // 属于其他会话（后台并行回合 / 时序残留）只更新其 busy，绝不写入当前 view——
+  // 根治「切换会话后新历史不刷新、追加在旧历史后」：上一个会话在途帧不会覆盖当前。
+  const CONTENT_FRAMES = new Set(['message.create', 'message.update', 'permission.request',
+    'turn.error', 'typing.start', 'typing.stop']);
+  function frameBelongsToActive(frameSid: string | undefined, payloadSid: string | undefined): boolean {
+    const sid = frameSid || payloadSid;
+    if (!sid) return true; // 无会话归属的帧（连接级）始终处理
+    return sid === activeId.value;
+  }
   function handleMessage(msg: any) {
     if (!msg || !msg.type) return;
     const type = msg.type;
@@ -446,6 +479,14 @@
     if (msg.session_id) bindServerSession(msg.session_id);
     // 记录该会话最后活动帧时间（busy 超时兜底用）：该会话收到任何帧即视为仍在运转
     if (msg.session_id) sessionLastWsAt[msg.session_id] = Date.now();
+    const frameSid = msg.session_id || payload.session_id;
+
+    // 会话隔离：内容/回合类帧只作用于当前展示会话；后台会话帧仅更新 busy，不渲染。
+    // 这样其它 worker 会话的流式输出不会污染当前聊天区，也不会把消息 push 错会话。
+    // 注：session.busy 是会话级帧，不在此隔离（下方 switch 统一按帧 session_id 更新对应会话）。
+    if (CONTENT_FRAMES.has(type) && !frameBelongsToActive(msg.session_id, payload.session_id)) {
+      return; // 后台会话内容帧直接丢弃，切回时由 session.history 补齐
+    }
 
     switch (type) {
       case 'message.create':
@@ -622,9 +663,18 @@
   function bindServerSession(serverId: string) {
     const s = activeSess.value;
     if (!s || !serverId) return;
-    if (s.id !== serverId) {
-      s.id = serverId;
-      activeId.value = serverId;
+    // 仅当本会话尚无服务端 id（fresh 本地临时 uuid，尚未收到任何服务端确认帧）时绑定一次。
+    // 绝不把已稳定绑定的会话 id 篡改为任意入帧的 session_id —— 后端所有业务帧的
+    // session_id 都是本会话初始的本地 uuid，本应恒等；一旦出现不等于当前 id 的帧
+    // （历史遗留/极端时序），篡改 id 会把两个会话的历史相互覆盖/追加，造成
+    // 「切换会话后新历史不刷新、旧历史残留」的串扰 bug。
+    if (s.serverBound) return;
+    if (serverId) {
+      s.serverBound = true;
+      if (s.id !== serverId) {
+        s.id = serverId;
+        activeId.value = serverId;
+      }
       saveSessions();
       saveActive();
     }
@@ -880,7 +930,10 @@
         title: ss.title || '新会话',
         messages: existing ? existing.messages : [],
         busy: false,
-        autoApprove: existing ? existing.autoApprove : false, // 需求(MYS-210)：随会话保留
+        // 服务端返回的会话其 id 已是稳定 server id，标记已绑定避免后续被误篡改
+        serverBound: true,
+        // 自动审批开关以 bmssm 服务端为准（跨浏览器/设备同步）；本地缓存的兜底
+        autoApprove: typeof ss.autoApprove === 'boolean' ? ss.autoApprove : existing ? !!existing.autoApprove : false,
       };
     });
     // 保留本地尚未同步到服务端的会话
@@ -931,6 +984,7 @@
     }
     // 请求 3：以服务端历史为权威基线，并合并本地尚未同步到的消息（在途内容、权限审批记录），
     // 避免刷新/换浏览器后历史缺失；同内容按 role+kind+content 去重，防止重复。
+    s.serverBound = true; // 收到 history 即本会话已绑定稳定 server id
     s.messages = mergeHistory(s.messages, serverMsgs);
     if (payload.title && s.title !== payload.title) s.title = payload.title;
     restoreBusy(s.id, !!payload.running); // 需求 4：恢复 busy 时走一次性校准
