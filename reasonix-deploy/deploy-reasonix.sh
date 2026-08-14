@@ -81,7 +81,7 @@ base_url       = "http://127.0.0.1:18080/v1"
 model          = "DeepSeek-V4-Flash-0731"
 api_key_env    = "DEEPSEEK_API_KEY"
 reasoning_protocol = "openai"
-context_window = 131072
+context_window = 200000
 
 [sandbox]
 bash = "off"     # 测试机无 bubblewrap；关闭 bash 沙箱以允许 unconfined shell

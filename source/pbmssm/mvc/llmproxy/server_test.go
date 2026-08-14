@@ -186,9 +186,9 @@ func TestForwardKeyUnset(t *testing.T) {
 	}
 }
 
-// TestForwardModelPrecedence 验证 MYS-171 model 规则：
-// 请求带非空 model → 上游收到该 model；请求无 model → 上游收到默认 llm.ModelName。
-func TestForwardModelPrecedence(t *testing.T) {
+// TestForwardModelAlwaysOverride 验证「覆盖下游请求」恒开（需求：删除前端开关，默认直接覆盖）：
+// 无论下游请求带什么 model（含空/缺省），转发时一律强制替换为默认 llm.ModelName。
+func TestForwardModelAlwaysOverride(t *testing.T) {
 	var gotModels []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -207,9 +207,8 @@ func TestForwardModelPrecedence(t *testing.T) {
 	svc := NewService(db)
 	cfg, _ := svc.SaveConfig(SaveRequest{
 		LLMApiBase: upstream.URL + "/llm", LLMApiKey: "k", LLMModel: "llm-default",
-		LLMEnabled:  boolPtr(true),
-		LLMOverride: boolPtr(false),
-		VLMApiBase:  upstream.URL + "/vlm", VLMApiKey: "k", VLMModel: "vlm-target",
+		LLMEnabled: boolPtr(true),
+		VLMApiBase: upstream.URL + "/vlm", VLMApiKey: "k", VLMModel: "vlm-target",
 	})
 	cfg.ForwardKey = "fk"
 	_ = svc.db.Model(&Config{}).Where("id = ?", 1).Update("forward_key", "fk").Error
@@ -234,22 +233,22 @@ func TestForwardModelPrecedence(t *testing.T) {
 		}
 	}
 
-	// 请求带 model=X → 上游收到 X
+	// 请求带 model=X → 一律覆盖为默认模型名
 	send("request-model-a")
-	if len(gotModels) != 1 || gotModels[0] != "request-model-a" {
-		t.Fatalf("with model: got = %v, want [request-model-a]", gotModels)
+	if len(gotModels) != 1 || gotModels[0] != "llm-default" {
+		t.Fatalf("with model: got = %v, want [llm-default]", gotModels)
 	}
 
 	// 请求无 model → 默认 llm.ModelName
 	send(nil)
 	if len(gotModels) != 2 || gotModels[1] != "llm-default" {
-		t.Fatalf("without model: got = %v, want [request-model-a llm-default]", gotModels)
+		t.Fatalf("without model: got = %v, want [llm-default llm-default]", gotModels)
 	}
 
 	// 请求 model 为空串 → 默认 llm.ModelName
 	send("")
 	if len(gotModels) != 3 || gotModels[2] != "llm-default" {
-		t.Fatalf("empty model: got = %v, want [request-model-a llm-default llm-default]", gotModels)
+		t.Fatalf("empty model: got = %v, want [llm-default llm-default llm-default]", gotModels)
 	}
 }
 
@@ -424,7 +423,7 @@ func TestSaveConfigVLMDefaultFallback(t *testing.T) {
 }
 
 // TestForwardModelKeptForImage 验证带图请求：model 保留请求值，图片仍走 VLM 描述化后整体路由 LLM。
-func TestForwardModelKeptForImage(t *testing.T) {
+func TestForwardModelAlwaysOverrideForImage(t *testing.T) {
 	var gotLLMModel string
 	vlmCalls := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -448,10 +447,9 @@ func TestForwardModelKeptForImage(t *testing.T) {
 	svc := NewService(db)
 	cfg, _ := svc.SaveConfig(SaveRequest{
 		LLMApiBase: upstream.URL + "/llm", LLMApiKey: "k", LLMModel: "llm-target",
-		LLMEnabled:  boolPtr(true),
-		LLMOverride: boolPtr(false),
-		VLMApiBase:  upstream.URL + "/vlm", VLMApiKey: "k", VLMModel: "vlm-target",
-		VLMEnabled:  boolPtr(true),
+		LLMEnabled: boolPtr(true),
+		VLMApiBase: upstream.URL + "/vlm", VLMApiKey: "k", VLMModel: "vlm-target",
+		VLMEnabled: boolPtr(true),
 	})
 	cfg.ForwardKey = "fk"
 	_ = svc.db.Model(&Config{}).Where("id = ?", 1).Update("forward_key", "fk").Error
@@ -479,8 +477,8 @@ func TestForwardModelKeptForImage(t *testing.T) {
 	if vlmCalls != 1 {
 		t.Errorf("VLM should be called once, calls = %d", vlmCalls)
 	}
-	if gotLLMModel != "my-custom-model" {
-		t.Errorf("image request should keep request model, got = %q", gotLLMModel)
+	if gotLLMModel != "llm-target" {
+		t.Errorf("image request model should be overridden (默认覆盖下游), got = %q, want llm-target", gotLLMModel)
 	}
 }
 
@@ -513,10 +511,9 @@ func TestImageDescribeRouting(t *testing.T) {
 	svc := NewService(db)
 	cfg, _ := svc.SaveConfig(SaveRequest{
 		LLMApiBase: upstream.URL + "/llm", LLMApiKey: "k", LLMModel: "llm-target",
-		LLMEnabled:  boolPtr(true),
-		LLMOverride: boolPtr(false),
-		VLMApiBase:  upstream.URL + "/vlm", VLMApiKey: "k", VLMModel: "vlm-target",
-		VLMEnabled:  boolPtr(true),
+		LLMEnabled: boolPtr(true),
+		VLMApiBase: upstream.URL + "/vlm", VLMApiKey: "k", VLMModel: "vlm-target",
+		VLMEnabled: boolPtr(true),
 	})
 	cfg.ForwardKey = "fk"
 	_ = svc.db.Model(&Config{}).Where("id = ?", 1).Update("forward_key", "fk").Error
@@ -536,8 +533,8 @@ func TestImageDescribeRouting(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("text: status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if gotLLMModel != "devproxy" {
-		t.Errorf("text: request model should be kept (MYS-171), got %q, want devproxy", gotLLMModel)
+	if gotLLMModel != "llm-target" {
+		t.Errorf("text: request model should be overridden (默认覆盖下游), got %q, want llm-target", gotLLMModel)
 	}
 	if vlmCalls != 0 {
 		t.Errorf("text should not call VLM, calls = %d", vlmCalls)
@@ -562,9 +559,9 @@ func TestImageDescribeRouting(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("image: status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	// 整体走 LLM：请求 model 被保留（devproxy）
-	if gotLLMModel != "devproxy" {
-		t.Errorf("image request should keep request model, got = %q", gotLLMModel)
+	// 整体走 LLM：请求 model 被覆盖为默认 llm-target（默认覆盖下游）
+	if gotLLMModel != "llm-target" {
+		t.Errorf("image request model should be overridden, got = %q, want llm-target", gotLLMModel)
 	}
 	// VLM 被调用一次生成描述
 	if vlmCalls != 1 {

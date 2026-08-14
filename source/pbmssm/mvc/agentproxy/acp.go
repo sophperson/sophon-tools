@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -514,7 +515,11 @@ func parseUpdateBody(raw json.RawMessage) *ACPSessionUpdate {
 		Title         string          `json:"title"`
 		Kind          string          `json:"kind"`
 		Status        string          `json:"status"`
-		Entries       json.RawMessage `json:"entries"`
+		RawInput      json.RawMessage `json:"rawInput"`
+		Locations     []struct {
+			Path string `json:"path"`
+		} `json:"locations"`
+		Entries json.RawMessage `json:"entries"`
 	}
 	if json.Unmarshal(raw, &str) == nil && str.SessionUpdate != "" {
 		ev := &ACPSessionUpdate{Discriminator: str.SessionUpdate, Raw: map[string]any{}}
@@ -534,6 +539,14 @@ func parseUpdateBody(raw json.RawMessage) *ACPSessionUpdate {
 		ev.ToolCallTitle = str.Title
 		ev.ToolCallKind = str.Kind
 		ev.ToolCallStatus = str.Status
+		if len(str.RawInput) > 0 {
+			ev.ToolCallRawInput = string(str.RawInput)
+		}
+		for _, loc := range str.Locations {
+			if strings.TrimSpace(loc.Path) != "" {
+				ev.ToolCallLocations = append(ev.ToolCallLocations, loc.Path)
+			}
+		}
 		return ev
 	}
 	// 兼容旧式嵌套对象形态：判别子作为 sessionUpdate 对象的首键。
@@ -585,12 +598,24 @@ func parseFlatUpdate(raw json.RawMessage) *ACPSessionUpdate {
 			Title      string `json:"title"`
 			Kind       string `json:"kind"`
 			Status     string `json:"status"`
+			RawInput   json.RawMessage `json:"rawInput"`
+			Locations  []struct {
+				Path string `json:"path"`
+			} `json:"locations"`
 		}
 		_ = json.Unmarshal(m[disc], &body)
 		ev.ToolCallID = body.ToolCallID
 		ev.ToolCallTitle = body.Title
 		ev.ToolCallKind = body.Kind
 		ev.ToolCallStatus = body.Status
+		if len(body.RawInput) > 0 {
+			ev.ToolCallRawInput = string(body.RawInput)
+		}
+		for _, loc := range body.Locations {
+			if strings.TrimSpace(loc.Path) != "" {
+				ev.ToolCallLocations = append(ev.ToolCallLocations, loc.Path)
+			}
+		}
 	case "tool_call_update":
 		var body struct {
 			ToolCallID string `json:"toolCallId"`

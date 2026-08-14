@@ -285,3 +285,35 @@ func TestRoundAssistantsMergesAdjacentTextWithDifferentIDs(t *testing.T) {
 		t.Errorf("thought messages = %d, want 1", thoughts)
 	}
 }
+
+// 需求（Req3）：工具调用摘要应展示「工具名: 执行的命令/编辑的文件路径」，
+// 而非仅 title·kind·status。rawInput 含 command / locations 含路径时优先展示。
+func TestToolCallSummaryShowsCommandAndPath(t *testing.T) {
+	cases := []struct {
+		name   string
+		tc     *ToolCallState
+		wantIn string
+	}{
+		{
+			name: "bash command",
+			tc:   &ToolCallState{ID: "c1", Title: "bash", Kind: "execute", Status: "completed", RawInput: `{"command":"df -h","timeout":30}`},
+			wantIn: "bash: df -h",
+		},
+		{
+			name: "edit file via locations",
+			tc:   &ToolCallState{ID: "c2", Title: "edit_file", Kind: "edit", Status: "pending", RawInput: `{"path":"/data/x.go","replace":"y"}`, Locations: []string{"/data/x.go"}},
+			wantIn: "edit_file: /data/x.go",
+		},
+		{
+			name: "fallback to title-kind-status",
+			tc:   &ToolCallState{ID: "c3", Title: "grep", Kind: "bash", Status: "completed"},
+			wantIn: "grep",
+		},
+	}
+	for _, c := range cases {
+		got := toolCallSummary(c.tc)
+		if !strings.Contains(got, c.wantIn) {
+			t.Errorf("%s: toolCallSummary = %q, want contains %q", c.name, got, c.wantIn)
+		}
+	}
+}

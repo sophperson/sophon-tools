@@ -1,6 +1,7 @@
 package agentproxy
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -22,10 +23,12 @@ type WSFrame struct {
 
 // ToolCallState tool_call / tool_call_update 的聚合状态（折叠块累积用）。
 type ToolCallState struct {
-	ID     string `json:"toolCallId"`
-	Title  string `json:"title,omitempty"`
-	Kind   string `json:"kind,omitempty"`
-	Status string `json:"status,omitempty"`
+	ID        string   `json:"toolCallId"`
+	Title     string   `json:"title,omitempty"`
+	Kind      string   `json:"kind,omitempty"`
+	Status    string   `json:"status,omitempty"`
+	RawInput  string   `json:"rawInput,omitempty"`  // 工具 args 原始 JSON（命令/路径）
+	Locations []string `json:"locations,omitempty"` // 工具触碰的文件路径
 }
 
 // streamedContent 一条流式消息（text/thought）的聚合状态，含渲染 kind。
@@ -204,7 +207,7 @@ func (a *MessageAdapter) toolCall(ev *ACPSessionUpdate, webchatID string, update
 	if id == "" {
 		return nil
 	}
-	tc := &ToolCallState{ID: id, Title: ev.ToolCallTitle, Kind: ev.ToolCallKind, Status: ev.ToolCallStatus}
+	tc := &ToolCallState{ID: id, Title: ev.ToolCallTitle, Kind: ev.ToolCallKind, Status: ev.ToolCallStatus, RawInput: ev.ToolCallRawInput, Locations: ev.ToolCallLocations}
 
 	a.state.mu.Lock()
 	if !update {
@@ -223,6 +226,12 @@ func (a *MessageAdapter) toolCall(ev *ACPSessionUpdate, webchatID string, update
 		}
 		if tc.Status == "" {
 			tc.Status = prev.Status
+		}
+		if tc.RawInput == "" {
+			tc.RawInput = prev.RawInput
+		}
+		if len(tc.Locations) == 0 {
+			tc.Locations = prev.Locations
 		}
 	}
 	a.state.toolCalls[id] = tc
@@ -320,12 +329,19 @@ func (a *MessageAdapter) modelName() string {
 }
 
 // toolCallSummary 生成工具折叠块的文本摘要（前端 collapse body 直接渲染）。
+// 需求：展示「工具名: 执行的命令 / 编辑的文件路径」，而非仅 title·kind·status。
 func toolCallSummary(tc *ToolCallState) string {
+	name := tc.Title
+	if name == "" {
+		name = tc.ID
+	}
+	detail := toolCallDetail(tc)
+	if detail != "" {
+		return name + ": " + detail
+	}
 	parts := make([]string, 0, 3)
-	if tc.Title != "" {
-		parts = append(parts, tc.Title)
-	} else if tc.ID != "" {
-		parts = append(parts, tc.ID)
+	if name != "" {
+		parts = append(parts, name)
 	}
 	if tc.Kind != "" {
 		parts = append(parts, tc.Kind)
@@ -337,4 +353,33 @@ func toolCallSummary(tc *ToolCallState) string {
 		return tc.ID
 	}
 	return strings.Join(parts, " · ")
+}
+
+// toolCallDetail 从工具调用中提取「命令 / 文件路径」：
+//   - locations 里有路径 → 优先取第一个（编辑/读文件类工具）；
+//   - 否则解析 rawInput JSON 取 command / path / file / paths / src 等主参。
+func toolCallDetail(tc *ToolCallState) string {
+	if len(tc.Locations) > 0 && strings.TrimSpace(tc.Locations[0]) != "" {
+		return tc.Locations[0]
+	}
+	if tc.RawInput == "" {
+		return ""
+	}
+	var obj map[string]any
+	if json.Unmarshal([]byte(tc.RawInput), &obj) != nil {
+		raw := strings.TrimSpace(tc.RawInput)
+		if raw == "" || raw == "{}" || raw == "null" {
+			return ""
+		}
+		return raw
+	}
+	for _, k := range []string{"command", "path", "file", "paths", "src", "cmd", "left", "right"} {
+		if v, ok := obj[k]; ok {
+			s := strings.TrimSpace(fmt.Sprintf("%v", v))
+			if s != "" && s != "<nil>" {
+				return s
+			}
+		}
+	}
+	return ""
 }

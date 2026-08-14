@@ -148,16 +148,9 @@ func forwardLLM(ctx context.Context, req map[string]interface{}, llm, vlm Provid
 			return nil, 0, fmt.Errorf("image describe failed: %w", err)
 		}
 	}
-	// 覆盖下游请求（OverrideModel）控制转发的 model 取值：
-	//   - true：无论下游请求里 model 是什么，转发时一律强制替换为配置的默认模型名；
-	//   - false：保留下游 model，仅当下游未指定（model 为空）时用默认模型名兜底。
-	if llm.OverrideModel {
-		req["model"] = llm.ModelName
-	} else {
-		if model, _ := req["model"].(string); model == "" {
-			req["model"] = llm.ModelName
-		}
-	}
+	// 覆盖下游请求（需求：删除前端开关，默认一律直接覆盖）：
+	// 无论下游请求里 model 是什么，转发时一律强制替换为配置的默认模型名。
+	req["model"] = llm.ModelName
 	body, _ := json.Marshal(req)
 
 	upstreamURL := strings.TrimRight(llm.ApiBase, "/") + "/chat/completions"

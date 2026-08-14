@@ -49,12 +49,6 @@
             placeholder="DeepSeek-V4-Flash-0731"
           />
         </a-form-item>
-        <a-form-item
-          label="覆盖下游请求"
-          tooltip="开启后，无论下游请求中的 model 是什么，转接上游时都强制使用上述默认模型名称；关闭时，仅当下游未指定 model 才使用默认模型名称。"
-        >
-          <a-switch v-model:checked="form.llmOverrideModel" />
-        </a-form-item>
       </a-form>
 
       <!-- 保存 + 测试 -->
@@ -196,7 +190,6 @@
     llmApiKey: '',
     llmModel: '',
     llmEnabled: true,
-    llmOverrideModel: true,
     llmHasKey: false,
   });
 
@@ -222,7 +215,6 @@
       form.llmApiBaseType = inferApiBaseType(cfg.llmApiBase || '');
       form.llmModel = cfg.llmModel || '';
       form.llmEnabled = cfg.llmEnabled !== false;
-      form.llmOverrideModel = cfg.llmOverrideModel !== false;
       form.llmHasKey = !!cfg.llmHasKey;
     }
   }
@@ -236,7 +228,6 @@
       llmApiKey: form.llmApiKey,
       llmModel: form.llmModel.trim() || 'DeepSeek-V4-Flash-0731',
       llmEnabled: checked,
-      llmOverrideModel: form.llmOverrideModel,
     });
     saving.value = false;
     if (res.ok) {
@@ -259,7 +250,6 @@
       llmApiKey: form.llmApiKey,
       llmModel: form.llmModel.trim() || 'DeepSeek-V4-Flash-0731',
       llmEnabled: form.llmEnabled,
-      llmOverrideModel: form.llmOverrideModel,
     });
     saving.value = false;
     if (res.ok) {

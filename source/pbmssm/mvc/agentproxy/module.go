@@ -47,6 +47,8 @@ func Start(cfg Config, db *gorm.DB) *Module {
 		return globalMod
 	}
 	globalMod = NewModule(cfg, db, nil)
+	// 注册 LLM 配置保存 → 重写 reasonix 上下文（sophnet 200K / 本地 20K）。
+	llmproxy.RegisterContextWindowApplier(ApplyReasonixContextWindow)
 	if err := globalMod.Start(); err != nil {
 		logger.Error("agentproxy: start failed: %v", err)
 	}

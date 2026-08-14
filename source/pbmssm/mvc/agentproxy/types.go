@@ -84,6 +84,8 @@ type ACPSessionUpdate struct {
 	ToolCallTitle     string            `json:"toolCallTitle,omitempty"`
 	ToolCallKind      string            `json:"toolCallKind,omitempty"`
 	ToolCallStatus    string            `json:"toolCallStatus,omitempty"`
+	ToolCallRawInput  string            `json:"toolCallRawInput,omitempty"`  // 工具调用 args 原始 JSON（命令/路径）
+	ToolCallLocations []string          `json:"toolCallLocations,omitempty"` // 工具触碰的文件路径
 	StopReason        string            `json:"stopReason,omitempty"`
 	Title             string            `json:"title,omitempty"`
 	Raw               map[string]any    `json:"-"`

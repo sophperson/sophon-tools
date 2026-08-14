@@ -99,6 +99,9 @@ func (s *Service) SaveConfig(req SaveRequest) (Config, error) {
 	if err := s.db.Save(&c).Error; err != nil {
 		return Config{}, err
 	}
+	// 需求：sophnet → 200K / 本地 → 20K 上下文。保存后按 LLM 上游分流通知
+	// agentproxy 重写 reasonix config.toml 的 context_window（并重启生效）。
+	ApplyContextWindow(c.LLMApiBase)
 	return c, nil
 }
 

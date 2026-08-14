@@ -759,17 +759,19 @@
         existingById.content = existingById.content + content;
         return;
       }
-      // 从后向前找最近的纯文本 assistant 气泡（可跳过中间的 thought/tool_calls），
-      // 只要中间没有 user 消息，就把本次 text 续接上去（保持同一气泡）。
+      // 从后向前找最近的纯文本 assistant 气泡（可跳过中间的 thought），
+      // 只要中间没有 user 消息且没有 tool_calls（工具调用为合并边界），
+      // 就把本次 text 续接上去（保持同一气泡）。
       let target: ChatMsg | null = null;
       for (let i = s.messages.length - 1; i >= 0; i--) {
         const m = s.messages[i];
         if (m.role === 'user') break; // 遇 user：跨轮，不再回退合并
+        if (m.kind === 'tool_calls') break; // 遇工具调用：不跨工具合并（各自成泡）
         if (m.role === 'assistant' && !m.kind) {
           target = m;
           break; // 找到最近的纯 text 气泡
         }
-        // thought / tool_calls：跳过继续向前找
+        // thought：跳过继续向前找
       }
       if (target) {
         target.content += content;
@@ -871,12 +873,11 @@
     return payload.content || '';
   }
 
-  // 把一条工具调用规整为可读的「工具名: 内容」（需求：不再显示裸 JSON）。
+  // 把一条工具调用规整为可读的「工具名: 内容」（需求：工具名 + 执行的命令/编辑的文件路径）。
   // 兼容两种载荷形态：
   //   - pico/旧形态：{function:{name,arguments}} → 「工具名: 参数主内容」
-  //   - ACP 现代形态 ToolCallState：{toolCallId,title,kind,status} → 与后端
-  //     toolCallSummary 同格式（title · kind · status），保证前端实时内容与后端
-  //     持久化 history 一致，历史合并去重时不产生重复。
+  //   - ACP 现代形态 ToolCallState：{toolCallId,title,kind,status,rawInput,locations}
+  //     → 「工具名: 命令/路径」（rawInput/locations 优先，与后端 toolCallSummary 一致）。
   function toolCallLine(c: any): string {
     if (c == null) return '';
     if (typeof c !== 'object') return String(c);
@@ -885,12 +886,34 @@
       const body = extractArgs(c.function.arguments);
       return [name, body].filter((x) => x).join(': ').trim();
     }
+    const name = c.title || c.toolCallId || '';
+    const detail = extractToolDetail(c);
+    if (detail) return [name, detail].filter((x) => x).join(': ').trim();
     const bits: string[] = [];
     if (c.title) bits.push(c.title);
     else if (c.toolCallId) bits.push(c.toolCallId);
     if (c.kind) bits.push(c.kind);
     if (typeof c.status === 'string' && c.status) bits.push(c.status);
     return bits.join(' · ');
+  }
+
+  // 从 ACP 现代形态 ToolCallState 提取「命令/文件路径」：locations 优先，其次 rawInput JSON。
+  function extractToolDetail(c: any): string {
+    if (Array.isArray(c.locations) && c.locations.length && c.locations[0]) {
+      const p = String(c.locations[0]);
+      if (p.trim()) return p.trim();
+    }
+    if (c.rawInput == null) return '';
+    if (typeof c.rawInput === 'object') return extractArgs(c.rawInput);
+    let text = String(c.rawInput).trim();
+    if (!text || text === '{}' || text === 'null') return '';
+    try {
+      const obj = JSON.parse(text);
+      if (obj && typeof obj === 'object') return extractArgs(obj);
+    } catch (e) {
+      /* 非 JSON，按原文返回 */
+    }
+    return text;
   }
 
   // 从工具调用的 arguments/参数中提取主参数文本（命令、文件路径优先）。
@@ -1050,16 +1073,18 @@
       // 纯文本空内容无信息量（源是流式片段，可能为空白），跳过避免空泡
       if (isPlainText && !content) continue;
       if (isPlainText) {
-        // 从后向前找 serverMsgs 里最近的纯文本 assistant 气泡（跳过中间的 thought/tool_calls）
+        // 从后向前找 serverMsgs 里最近的纯文本 assistant 气泡（可跳过中间的 thought，
+        // 但遇 tool_calls 即止——工具调用为合并边界，调用两侧文本各自成泡）
         let prevPlain: ChatMsg | null = null;
         for (let i = serverMsgs.length - 1; i >= 0; i--) {
           const pm = serverMsgs[i];
           if (pm.role === 'user') break;
+          if (pm.kind === 'tool_calls') break;
           if (pm.role === 'assistant' && !pm.kind) {
             prevPlain = pm;
             break;
           }
-          // thought/tool_calls 跳过
+          // thought 跳过
         }
         if (prevPlain) {
           prevPlain.content += content;

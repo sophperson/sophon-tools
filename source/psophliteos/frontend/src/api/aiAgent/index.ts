@@ -26,7 +26,6 @@ export interface AgentConfig {
   llmApiBase: string;
   llmModel: string;
   llmEnabled: boolean;
-  llmOverrideModel: boolean;
   llmHasKey: boolean;
   forwardKey?: string;
   updatedAt?: string;
@@ -52,7 +51,6 @@ export async function saveAgentConfig(cfg: {
   llmApiKey: string;
   llmModel: string;
   llmEnabled: boolean;
-  llmOverrideModel: boolean;
 }): Promise<{ ok: boolean; message?: string }> {
   try {
     const res = await defHttp.put(
