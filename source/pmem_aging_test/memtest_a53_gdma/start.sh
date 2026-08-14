@@ -89,7 +89,7 @@ function memtest_s() {
 			VPU_MEM_USAGE=$(get_ion_usage "/sys/kernel/debug/ion/bm_vpu_heap_dump")
 			VPP_MEM_USAGE=$(get_ion_usage "/sys/kernel/debug/ion/bm_vpp_heap_dump")
 			t_num=4
-		elif [[ "${CPU_MODEL}" == "bm1688" ]] || [[ "${CPU_MODEL}" == "cv186ah" ]]; then
+		elif [[ "${CPU_MODEL}" == "bm1688" ]] || [[ "${CPU_MODEL}" == "cv186ah" ]] || [[ "${CPU_MODEL}" == "cv84x6" ]]; then
 			TPU_MEM_USAGE=$(get_ion_usage "/sys/kernel/debug/ion/cvi_npu_heap_dump")
 			VPP_MEM_USAGE=$(get_ion_usage "/sys/kernel/debug/ion/cvi_vpp_heap_dump")
 			VPU_MEM_USAGE="0"
@@ -130,7 +130,7 @@ function memtest_s() {
 	# CPU NAME
 	CPU_MODEL=$(awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo)
 	# WORK MODE
-	SOC_MODE_CPU_MODEL=("bm1684x" "bm1684" "bm1688" "cv186ah")
+	SOC_MODE_CPU_MODEL=("bm1684x" "bm1684" "bm1688" "cv186ah" "cv84x6")
 	# TEST CORE ID (only for PCIE MODE)
 	if [[ "${PCIE_DEV_ID}" != "" ]]; then
 		TEST_DEV_ID=${PCIE_DEV_ID}
