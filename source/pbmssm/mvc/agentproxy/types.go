@@ -10,7 +10,7 @@ import "time"
 // 默认值。
 const (
 	DefaultPort      = 18990
-	DefaultWorkDir   = "/home/linaro"
+	DefaultWorkDir   = "/data/sophon/reasonix-home"
 	DefaultBinary    = "reasonix"
 	DefaultBackoffMax = 30 * time.Second
 )

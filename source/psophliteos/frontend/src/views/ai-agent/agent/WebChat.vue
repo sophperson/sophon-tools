@@ -317,7 +317,8 @@
   // 由消息状态派生，切换会话/允许/拒绝/回执后自动同步，与消息历史共享同一份 permDone。
   const pendingPerm = computed<ChatMsg | null>(() => {
     const msgs = activeSess.value?.messages || [];
-    return msgs.find((m) => m.kind === 'permission' && !m.permDone) || null;
+    // permDone === null: 仍在等待用户处理；true=已允许，false=已拒绝/取消（均视为已解决，不再作为待办卡片）。
+    return msgs.find((m) => m.kind === 'permission' && m.permDone === null) || null;
   });
   // 需求(MYS-210)：自动审批开关。绑定当前会话的 autoApprove 字段，
   // 随 Session 一起持久化（saveSessions / loadSessions + 同步到 bmssm 后端），
