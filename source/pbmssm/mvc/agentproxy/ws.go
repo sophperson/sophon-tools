@@ -308,6 +308,8 @@ func (c *conn) handleFrame(frame clientFrame) {
 		c.handleSessionNewLocked()
 	case "session.rename":
 		c.handleSessionRenameLocked(frame)
+	case "session.autoapprove":
+		c.handleSessionAutoapproveLocked(frame)
 	case "permission.respond":
 		c.handlePermissionRespondLocked(frame)
 	default:
@@ -445,6 +447,8 @@ func (c *conn) handleSessionListLocked() {
 			"acpSessionId": s.ACPSessionID,
 			"updatedAt":    s.UpdatedAt,
 			"messageCount": len(s.Messages),
+			// 自动审批开关（跨浏览器/设备持久化，随会话保存）
+			"autoApprove": s.AutoApprove,
 			// 需求 2：会话是否有进行中的回合（前端忙碌转圈标记）
 			"running": c.module.HasTurn(s.ACPSessionID),
 		})
@@ -477,10 +481,11 @@ func (c *conn) handleSessionHistoryLocked(frame clientFrame) {
 		Type:      "session.history",
 		SessionID: sid,
 		Payload: map[string]any{
-			"session_id": sid,
-			"messages":   s.Messages,
-			"title":      s.Title,
-			"running":    c.module.HasTurn(s.ACPSessionID),
+			"session_id":  sid,
+			"messages":    s.Messages,
+			"title":       s.Title,
+			"autoApprove": s.AutoApprove, // 自动审批开关（跨浏览器/设备持久化）
+			"running":     c.module.HasTurn(s.ACPSessionID),
 		},
 	}
 	select {
@@ -512,6 +517,33 @@ func (c *conn) handleSessionRenameLocked(frame clientFrame) {
 	// 回执标题更新
 	select {
 	case c.send <- []WSFrame{{Type: "session.updated", SessionID: sid, Payload: map[string]any{"title": title}}}:
+	case <-c.done:
+	}
+}
+
+// handleSessionAutoapproveLocked session.autoapprove：设置会话自动审批开关（跨浏览器/设备持久化）。
+// payload：{session_id, autoApprove: bool}。前置：持 c.mu。
+func (c *conn) handleSessionAutoapproveLocked(frame clientFrame) {
+	sid := frame.SessionID
+	if sid == "" {
+		if p, ok := frame.Payload["session_id"].(string); ok {
+			sid = p
+		}
+	}
+	if sid == "" {
+		return
+	}
+	on := false
+	if b, ok := frame.Payload["autoApprove"].(bool); ok {
+		on = b
+	}
+	if !c.module.Sessions().SetAutoApprove(sid, on) {
+		c.enqueueErrorLocked("会话不存在", "session_not_found")
+		return
+	}
+	// 回执（供同一会话的其他订阅端/重连同步）
+	select {
+	case c.send <- []WSFrame{{Type: "session.updated", SessionID: sid, Payload: map[string]any{"autoApprove": on}}}:
 	case <-c.done:
 	}
 }

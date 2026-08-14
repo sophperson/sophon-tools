@@ -126,24 +126,10 @@
         <div v-if="pendingPerm" class="webchat-msg webchat-msg-assistant">
           <div class="webchat-bubble webchat-perm">
             <div class="webchat-perm-label">需要确认：<strong>{{ pendingPerm.permTitle }}</strong></div>
-            <div class="webchat-perm-hint">{{ pendingPerm.isAsk ? '请选择一个选项' : 'Agent 请求执行上述操作，是否允许？(60 秒未操作将自动拒绝)' }}</div>
+            <div class="webchat-perm-hint">Agent 请求执行上述操作，是否允许？(60 秒未操作将自动拒绝)</div>
             <div class="webchat-perm-actions">
-              <template v-if="pendingPerm.isAsk">
-                <button
-                  v-for="opt in askChoices"
-                  :key="opt.optionId"
-                  class="webchat-perm-btn webchat-perm-allow"
-                  type="button"
-                  @click="respondPermissionOption(pendingPerm.permReqId, opt.optionId, pendingPerm)"
-                  >{{ opt.name }}</button
-                >
-                <button class="webchat-perm-btn webchat-perm-deny" type="button"
-                  @click="respondPermission(pendingPerm.permReqId, false, pendingPerm)">取消</button>
-              </template>
-              <template v-else>
-                <button class="webchat-perm-btn webchat-perm-allow" type="button" @click="respondPermission(pendingPerm.permReqId, true, pendingPerm)">允许</button>
-                <button class="webchat-perm-btn webchat-perm-deny" type="button" @click="respondPermission(pendingPerm.permReqId, false, pendingPerm)">拒绝</button>
-              </template>
+              <button class="webchat-perm-btn webchat-perm-allow" type="button" @click="respondPermission(pendingPerm.permReqId, true, pendingPerm)">允许</button>
+              <button class="webchat-perm-btn webchat-perm-deny" type="button" @click="respondPermission(pendingPerm.permReqId, false, pendingPerm)">拒绝</button>
             </div>
           </div>
         </div>
@@ -209,10 +195,6 @@
     permReqId?: number;
     permTitle?: string;
     permDone?: boolean | null;
-    // ask 用户决策卡片（MYS-212）：后端 permission.request 附带 is_ask/options，
-    // isAsk=true 表示需用户在展示的选项中选择，permOptions 为可选项列表。
-    isAsk?: boolean;
-    permOptions?: { optionId: string; name: string; kind: string }[];
   }
 
   interface Session {
@@ -337,15 +319,9 @@
     const msgs = activeSess.value?.messages || [];
     return msgs.find((m) => m.kind === 'permission' && !m.permDone) || null;
   });
-  // MYS-212：ask 决策卡片可点的选项（排除 kind==='reject_once' 的选项，仅展示可选的决策）。
-  const askChoices = computed(() => {
-    const opts = pendingPerm.value?.permOptions || [];
-    return opts.filter((o) => o.kind !== 'reject_once');
-  });
-
   // 需求(MYS-210)：自动审批开关。绑定当前会话的 autoApprove 字段，
-  // 随 Session 一起持久化（saveSessions / loadSessions），刷新或换浏览器后恢复、
-  // 各会话独立。切换会话/无会话时回退 false。
+  // 随 Session 一起持久化（saveSessions / loadSessions + 同步到 bmssm 后端），
+  // 刷新或换浏览器后恢复、各会话独立。切换会话/无会话时回退 false。
   const autoApproveOn = computed<boolean>({
     get: () => !!activeSess.value?.autoApprove,
     set: (v: boolean) => {
@@ -353,6 +329,11 @@
       if (s) {
         s.autoApprove = v;
         saveSessions();
+        // 同步到 bmssm（跨浏览器/设备持久化），session.list/history 据此恢复。
+        if (ws && ws.ready) {
+          ws.sendFrame({ type: 'session.autoapprove', session_id: s.id,
+            payload: { session_id: s.id, autoApprove: v } });
+        }
       }
     },
   });
@@ -587,8 +568,9 @@
         setSessionBusy(msg.session_id || payload.session_id, !!payload.busy);
         break;
       case 'session.updated':
-        // 需求 3：自定义标题后的回执
+        // 需求 3：自定义标题后的回执 + 自动审批开关跨浏览器同步回执
         applyTitle(msg.session_id, payload.title);
+        if (typeof payload.autoApprove === 'boolean') applyAutoApprove(msg.session_id, payload.autoApprove);
         break;
       case 'permission.request':
         handlePermissionRequest(msg.session_id, payload);
@@ -607,15 +589,14 @@
   }
 
   /** permission.request：Agent 触发需用户批准的工具调用 → 在活跃会话插入审批卡片。
-       MYS-212：payload 可能带 is_ask=true + options（ask 用户决策：Agent 请用户在
-       展示的选项中选择）。自动审批仅对普通命令审批自动放行；ask 用户决策始终弹卡
-       让用户选择（用户决策工具不能因自动审批被吞掉）。 */
+       reasonix 已移除模型侧 ask 工具（MYS-212）：本端收到的 permission.request 只含
+       命令审批（Allow/allow_always/Reject），不再有真实候选选项的选择题 ask。因此
+       自动审批直接全部放行（回 allow），无需区分 ask vs 命令审批。 */
   function handlePermissionRequest(sessionId: string | undefined, payload: any) {
     const reqId = payload?.request_id;
     const toolCall = payload?.tool_call || {};
     if (reqId == null) return;
     const s = ensureSession();
-    const isAsk = !!payload?.is_ask;
     const makePermMsg = (done: boolean | null) => ({
       key: 'perm' + msgSeq++,
       role: 'assistant',
@@ -625,11 +606,9 @@
       permTitle: (toolCall.title as string) || '工具调用',
       permDone: done,
       open: false,
-      isAsk,
-      permOptions: Array.isArray(payload?.options) ? payload.options : [],
     });
-    // 仅命令审批在自动审批下自动放行；ask 用户决策始终弹卡让用户选择。
-    if (s.autoApprove && !isAsk) {
+    // 开启自动审批 → 命令审批直接自动放行（allow=true 对应 allow_once 本次放行）。
+    if (s.autoApprove) {
       if (ws && ws.ready) {
         ws.sendFrame({
           type: 'permission.respond',
@@ -657,21 +636,6 @@
       });
     }
     m.permDone = allow;
-    saveSessions();
-  }
-
-  /** MYS-212：ask 决策卡片 —— 用户点选某个选项 → 回传 permission.respond 带 option_id，
-        把用户选中的选项回吐给 reasonix（修复 ask「无响应」缺陷）。选中的决策视为已允许。 */
-  function respondPermissionOption(reqId: number, optionId: string, m: ChatMsg) {
-    const sid = activeSess.value?.id;
-    if (ws && ws.ready) {
-      ws.sendFrame({
-        type: 'permission.respond',
-        session_id: sid,
-        payload: { session_id: sid, request_id: reqId, allow: true, option_id: optionId },
-      });
-    }
-    m.permDone = true;
     saveSessions();
   }
 
@@ -743,6 +707,13 @@
     if (!sid || !title) return;
     const s = sessions.value.find((x) => x.id === sid);
     if (s) s.title = title;
+  }
+
+  // 自动审批开关跨浏览器/设备同步回执（session.updated 的 autoApprove）。
+  function applyAutoApprove(sid: string | undefined, on: boolean) {
+    if (!sid) return;
+    const s = sessions.value.find((x) => x.id === sid);
+    if (s) s.autoApprove = !!on;
   }
 
   function bindServerSession(serverId: string) {
@@ -1072,6 +1043,8 @@
     s.serverBound = true; // 收到 history 即本会话已绑定稳定 server id
     s.messages = mergeHistory(s.messages, serverMsgs);
     if (payload.title && s.title !== payload.title) s.title = payload.title;
+    // 自动审批开关跨浏览器同步：以 bmssm 服务端为准
+    if (typeof payload.autoApprove === 'boolean') s.autoApprove = payload.autoApprove;
     restoreBusy(s.id, !!payload.running); // 需求 4：恢复 busy 时走一次性校准
     clearOpenThought();
     saveSessions();

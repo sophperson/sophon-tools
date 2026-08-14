@@ -297,6 +297,22 @@ func (sm *SessionManager) Rename(webchatID, title string) bool {
 	return true
 }
 
+// SetAutoApprove 设置会话的自动审批开关（跨浏览器/设备持久化）。
+func (sm *SessionManager) SetAutoApprove(webchatID string, on bool) bool {
+	sm.mu.Lock()
+	s, ok := sm.sessions[webchatID]
+	if ok {
+		s.AutoApprove = on
+		s.UpdatedAt = time.Now()
+	}
+	sm.mu.Unlock()
+	if !ok {
+		return false
+	}
+	sm.persist(s)
+	return true
+}
+
 // EnsureTitle 若会话仍为默认标题，则用给定 fallback（通常为第一条用户消息）设置标题。
 // 返回是否真正设置了。
 // 规则（需求 3）：默认用用户第一个问题的前 8 个字作为标题。

@@ -2,7 +2,6 @@ package agentproxy
 
 import (
 	"encoding/json"
-	"strings"
 	"time"
 
 	"bmssm/logger"
@@ -45,6 +44,9 @@ type pendingPermission struct {
 }
 
 // ResultFrameClient 组装 permission.request WS 帧负载（protobuf 无关，纯 map）。
+// reasonix 已移除模型侧 ask 工具（MYS-212）：本端收到的 permission.request 只含
+// 命令审批（Allow/allow_always/Reject），不再有真实候选选项的选择题 ask，故不再
+// 下发 is_ask 字段——自动审批可直接全部允许，无需启发式区分。
 func permissionRequestFrame(webchatID string, reqID int64, tc PermissionToolCall, options []PermissionOption) WSFrame {
 	return WSFrame{
 		Type:      "permission.request",
@@ -54,7 +56,6 @@ func permissionRequestFrame(webchatID string, reqID int64, tc PermissionToolCall
 			"request_id": reqID,
 			"tool_call":  tc,
 			"options":    options,
-			"is_ask":     isAskDecision(options),
 		},
 	}
 }
@@ -207,53 +208,4 @@ func (m *Module) permissionTimeout() time.Duration {
 		return 60 * time.Second
 	}
 	return d
-}
-
-// genericApprovalTokens 通用审批态标签（含取消）。isAskDecision 据此区分：
-// options 若出现任意非通用审批态标签的首 token，视为 ask 用户决策（真实候选）；
-// 否则视为普通命令审批（允许/拒绝）。
-var genericApprovalTokens = map[string]struct{}{
-	"允许": {}, "拒绝": {}, "取消": {}, "确定": {},
-	"allow": {}, "deny": {}, "cancel": {}, "yes": {}, "no": {},
-	"reject": {}, "approve": {}, // 英文命令审批常见选项（如 write_file 的 Allow/Reject）
-	"ok": {},
-}
-
-// firstToken 取 option.name 首段（按 `/`、`-`、空格、`：`、`:` 切）。
-func firstToken(name string) string {
-	for _, sep := range []rune{'/', '-', ' ', '：', ':'} {
-		if i := indexRune(name, sep); i >= 0 {
-			return lowerTrim(name[:i])
-		}
-	}
-	return lowerTrim(name)
-}
-
-func indexRune(s string, r rune) int {
-	for i, c := range s {
-		if c == r {
-			return i
-		}
-	}
-	return -1
-}
-
-func lowerTrim(s string) string {
-	s = strings.TrimSpace(s)
-	return strings.ToLower(s)
-}
-
-// isAskDecision 判定 request_permission 是否为「ask 用户决策」。
-// 规则：options 中存在某 option 的首 token 不属于通用审批态集合 => 用户决策 ask。
-// 覆盖真机抓帧：命令审批首 token=允许/拒绝 → false；ask 决策首 token=先查a/先查b → true。
-func isAskDecision(options []PermissionOption) bool {
-	if len(options) == 0 {
-		return false
-	}
-	for _, o := range options {
-		if _, ok := genericApprovalTokens[firstToken(o.Name)]; !ok {
-			return true
-		}
-	}
-	return false
 }

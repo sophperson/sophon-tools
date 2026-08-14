@@ -48,15 +48,16 @@ const (
 
 // WebchatSession webchatUI 会话模型（sqlite 持久化）。
 type WebchatSession struct {
-	ID            string       `json:"id"`   // uuid 主键（前端 localStorage 同一 id）
-	ACPSessionID  string       `json:"acpSessionId"`
-	Title         string       `json:"title"`
-	Cwd           string       `json:"cwd"`
-	Messages      []ChatMessage `json:"messages,omitempty" gorm:"-"` // 历史快照（JSON 存 MessagesJSON）
-	MessagesJSON  string       `json:"-"`                            // sqlite 存储用
-	State         SessionState `json:"state"`
-	CreatedAt     time.Time    `json:"createdAt"`
-	UpdatedAt     time.Time    `json:"updatedAt"`
+	ID           string       `json:"id"`   // uuid 主键（前端 localStorage 同一 id）
+	ACPSessionID string       `json:"acpSessionId"`
+	Title        string       `json:"title"`
+	Cwd          string       `json:"cwd"`
+	AutoApprove  bool         `json:"autoApprove"` // 自动审批开关（跨浏览器/设备持久化）
+	Messages     []ChatMessage `json:"messages,omitempty" gorm:"-"` // 历史快照（JSON 存 MessagesJSON）
+	MessagesJSON string       `json:"-"`                            // sqlite 存储用
+	State        SessionState `json:"state"`
+	CreatedAt    time.Time    `json:"createdAt"`
+	UpdatedAt    time.Time    `json:"updatedAt"`
 }
 
 // TableName 指定表名。
