@@ -254,14 +254,23 @@ func (c *Client) RespondRequest(reqID int64, result json.RawMessage) error {
 	}))
 }
 
-// ResolvePermission 回应 agent 发起的 session/request_permission 审批请求。
-// allow=true 回 selected + optionId=allow_once（本次放行）；false 回 cancelled。
+// ResolvePermission 兼容旧签名，转发到 ResolvePermissionOption（无 optionID）。
 // reqID 为下行 request 的 JSON-RPC id（来自 onNotify 的 reqID）。
 // 响应结构对齐 reasonix PermissionRequestResult：{"outcome":{outcome,optionId}}。
 func (c *Client) ResolvePermission(reqID int64, allow bool) error {
+	return c.ResolvePermissionOption(reqID, allow, "")
+}
+
+// ResolvePermissionOption 回应 agent 发起的 session/request_permission。optionID 非空
+// 回 selected+该 optionId；否则 allow=true 回 selected+allow_once；allow=false 回 cancelled。
+func (c *Client) ResolvePermissionOption(reqID int64, allow bool, optionID string) error {
 	inner := map[string]any{"outcome": "cancelled"}
 	if allow {
-		inner = map[string]any{"outcome": "selected", "optionId": "allow_once"}
+		opt := optionID
+		if opt == "" {
+			opt = "allow_once"
+		}
+		inner = map[string]any{"outcome": "selected", "optionId": opt}
 	}
 	result, _ := json.Marshal(map[string]any{"outcome": inner})
 	return c.RespondRequest(reqID, result)

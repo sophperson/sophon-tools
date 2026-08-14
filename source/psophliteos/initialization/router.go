@@ -94,6 +94,14 @@ func Routers(webFS fs.FS) *gin.Engine {
 		Router.Any("/api/v1/*any", middleware.SSO(), func(c *gin.Context) {
 			proxy.ServeHTTP(c.Writer, c.Request)
 		})
+		// Reasonix agent WS：同源 8080 → bmssm 主 server /agent/ws。
+		// 复用同一 proxy（其 Director/Transport 已支持 WebSocket 升级）。
+		// 注意：不加 SSO 中间件。WS 升级请求来自同源页面，前端 PicoWs 以
+		// 子协议 token.<forward_key> 鉴权（bmssm serveWS 校验），不携带 SSO 所需的
+		// Authorization Bearer 或 ?token=；SSO() 会因拿不到 token 而 401 中断升级。
+		Router.Any("/agent/ws", func(c *gin.Context) {
+			proxy.ServeHTTP(c.Writer, c.Request)
+		})
 	} else {
 		logger.Error("bmssm server url parse error: %v", err)
 	}

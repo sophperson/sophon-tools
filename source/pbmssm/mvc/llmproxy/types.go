@@ -54,7 +54,7 @@ func DefaultConfig() Config {
 	return Config{
 		ID:          1,
 		LLMApiBase:  "https://www.sophnet.com/api/open-apis/v1",
-		LLMModel:    "sophnet-deepseek",
+		LLMModel:    "DeepSeek-V4-Flash-0731",
 		LLMEnabled:  false,
 		LLMOverride: true,
 		VLMApiBase:  "https://www.sophnet.com/api/open-apis/v1",

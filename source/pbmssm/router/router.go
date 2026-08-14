@@ -37,6 +37,13 @@ func Register(r *gin.Engine) {
 	// /health JSON 端点（公开）
 	r.GET("/health", metrics.HealthHandler())
 
+	// Reasonix agent WS（由 bmssm 主 server 承载，sophliteos 反代 /agent/ws 到此处）。
+	// 不走 Auth 中间件：WS 握手浏览器无法加 Authorization header，handler 内用
+	// 子协议 token.<key> 自行鉴权（见 agentproxy serveWS）。
+	if agentH := agentproxyCtrl.HubHandler(); agentH != nil {
+		r.GET("/agent/ws", gin.WrapH(agentH))
+	}
+
 	// 用户模块控制器（使用 database.DB()）
 	userCtrl := user.DefaultController()
 	auditCtrl := audit.DefaultController()

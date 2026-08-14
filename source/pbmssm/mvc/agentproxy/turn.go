@@ -2,7 +2,16 @@ package agentproxy
 
 import (
 	"context"
+	"time"
+
+	"bmssm/logger"
 )
+
+// turnCancelWait 打断在途回合时，等待旧回合 streaming 完全停止的超时。
+// 见 StartTurn：取消旧回合后必须等其 updates 通道关闭（consumeTurn 退出）再发新
+// prompt，否则同一 ACP 会话会出现两个并发 session/prompt，reasonix 会丢失新回合——
+// 表现为浏览器刷新/打断后 agent 不再响应，需重启 agent 服务。
+const turnCancelWait = 5 * time.Second
 
 // Turn 一次往返（message.send → agent 回复）的运行单元，与 WS 连接解耦。
 // 关键点：回合的生命周期由 Module 持有，而非绑定到某个 conn——
@@ -25,14 +34,22 @@ type Turn struct {
 // 回合内容通过 hub 投递给当前绑定该会话的连接（可能有、可能无）。
 func (m *Module) StartTurn(webchatID, acpID, content string) error {
 	m.mu.Lock()
-	if old := m.turns[acpID]; old != nil {
-		m.mu.Unlock()
-		// 取消旧回合（不阻塞等待其清理，避免持锁）
+	old := m.turns[acpID]
+	m.mu.Unlock()
+	// 若该会话已有在途回合：先取消，并【等待旧回合真正停止】再开新回合。
+	// 不能只发 session/cancel 就立刻 prompt——否则同一 ACP 会话出现两个并发
+	// session/prompt，reasonix 只认先到的一个，新回合被丢弃（busy 一直转、无输出）。
+	if old != nil {
 		if old.cancel != nil {
 			_ = old.cancel()
 		}
-	} else {
-		m.mu.Unlock()
+		// 等旧回合 streaming 结束（consumeTurn 的 done 关闭，即 updates 通道关闭）。
+		select {
+		case <-old.done:
+			// 旧回合已完全停止，可安全发起新回合
+		case <-time.After(turnCancelWait):
+			logger.Warn("agentproxy: turn cancel wait timeout (session=%s), proceeding", acpID)
+		}
 	}
 	// 新一轮开始：清掉该会话可能残留的待审批（旧回合被打断，不再等用户批）
 	m.denyPermissionsForSession(acpID)

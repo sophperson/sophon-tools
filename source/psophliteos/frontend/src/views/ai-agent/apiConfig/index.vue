@@ -46,7 +46,7 @@
           <a-input
             v-model:value="form.llmModel"
             style="width: 100%"
-            placeholder="sophnet-deepseek"
+            placeholder="DeepSeek-V4-Flash-0731"
           />
         </a-form-item>
         <a-form-item
@@ -234,7 +234,7 @@
     const res = await saveAgentConfig({
       llmApiBase: form.llmApiBase.trim() || SOPHNET_API_BASE,
       llmApiKey: form.llmApiKey,
-      llmModel: form.llmModel.trim() || 'sophnet-deepseek',
+      llmModel: form.llmModel.trim() || 'DeepSeek-V4-Flash-0731',
       llmEnabled: checked,
       llmOverrideModel: form.llmOverrideModel,
     });
@@ -257,7 +257,7 @@
     const res = await saveAgentConfig({
       llmApiBase: form.llmApiBase.trim(),
       llmApiKey: form.llmApiKey,
-      llmModel: form.llmModel.trim() || 'sophnet-deepseek',
+      llmModel: form.llmModel.trim() || 'DeepSeek-V4-Flash-0731',
       llmEnabled: form.llmEnabled,
       llmOverrideModel: form.llmOverrideModel,
     });

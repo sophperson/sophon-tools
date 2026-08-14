@@ -2,14 +2,15 @@
  * Reasonix WebSocket 客户端（sophliteos 原生接入，PicoWS 的 TS 移植）。
  *
  * 职责：
- *   - 建立与 Reasonix agentproxy 的 WS 连接：ws://<host>:18990/agent/ws
+ *   - 建立与 Reasonix agentproxy 的 WS 连接：ws://<host>:8080/agent/ws
+ *     （端口 8080 为 sophliteos 同源入口，/agent/ws 由 sophliteos 反向代理转发到 bmssm 主服务）
  *   - 用子协议 token.<forward_key> 认证（浏览器无法设 Header，对齐 agentproxy ws.go）
  *   - 发送 message.send / session.list / session.history，接收 message.create /
  *     message.update / typing.* / session.create / error 等帧
  *   - 断线自动重连（3s 退避）
  */
 
-const REASONIX_DEFAULT_PORT = 18990;
+const REASONIX_DEFAULT_PORT = 8080;
 const REASONIX_WS_PATH = '/agent/ws';
 
 export type WsState = 'connecting' | 'open' | 'reconnecting' | 'closed';

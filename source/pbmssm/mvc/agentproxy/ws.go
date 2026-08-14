@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -73,8 +71,7 @@ type Hub struct {
 	conns    map[*conn]bool
 	byACP    map[string]*conn // acpSessionID -> conn
 	started  bool
-	srv      *http.Server // WS http.Server（listen 持有，Stop 关闭）
-	unlisten func()       // 模块事件监听注销句柄（Start 注册，Stop 调用）
+	unlisten func() // 模块事件监听注销句柄（Start 注册，Stop 调用）
 }
 
 // newHub 创建 Hub。key 为转发 key（对齐 llm_proxy_config.forward_key）。
@@ -87,7 +84,8 @@ func newHub(module *Module, key string) *Hub {
 	}
 }
 
-// Start 启动 Hub：注册模块事件监听、启动独立 WS HTTP server。
+// Start 启动 Hub：注册模块事件监听。不再拉起独立 WS http.Server —— agent WS 端点
+// 由 bmssm 主 gin server 挂载（AgentWSHandler），见 router 注册 /agent/ws。
 func (h *Hub) Start() error {
 	h.mu.Lock()
 	if h.started {
@@ -100,42 +98,16 @@ func (h *Hub) Start() error {
 	// 若仍注册 raw 事件 → conn.enqueue 会与 consumeTurn 双重递送，导致前端重复输出。
 	h.mu.Unlock()
 
-	return h.listen()
-}
-
-// listen 启动独立 http.Server 监听 agentproxy.listenIP:port。
-// ListenAndServe 是阻塞调用，放在模块 goroutine 里；进程生命周期随模块。
-func (h *Hub) listen() error {
-	cfg := h.module.cfg
-	mux := http.NewServeMux()
-	mux.HandleFunc(wsPath, h.serveWS)
-
-	addr := net.JoinHostPort(cfg.ListenIP, strconv.Itoa(cfg.Port))
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           mux,
-		ReadHeaderTimeout: 30 * time.Second,
-	}
-	logger.Info("agentproxy: ws server listening on %s", addr)
-	// 持有引用供 Stop 关闭（加锁写，避免与 Stop 读竞态）。
-	h.mu.Lock()
-	h.srv = srv
-	h.mu.Unlock()
-
-	// 阻塞直到 server 关闭；关闭由 Stop 触发。
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		logger.Error("agentproxy: ws server failed: %v", err)
-		h.mu.Lock()
-		if h.srv == srv {
-			h.srv = nil
-		}
-		h.mu.Unlock()
-		return err
-	}
 	return nil
 }
 
-// Stop 关闭 Hub：注销事件监听、关闭 WS server、关闭全部连接。
+// AgentWSHandler 供 bmssm 主 gin server 挂载 agent WS 端点（/agent/ws）。
+// 路径匹配由 router 的路由决定；serveWS 内部不再校验路径。
+func (h *Hub) AgentWSHandler(w http.ResponseWriter, r *http.Request) {
+	h.serveWS(w, r)
+}
+
+// Stop 关闭 Hub：注销事件监听、关闭全部连接。
 func (h *Hub) Stop() {
 	h.mu.Lock()
 	if !h.started {
@@ -147,8 +119,6 @@ func (h *Hub) Stop() {
 		h.unlisten()
 		h.unlisten = nil
 	}
-	srv := h.srv
-	h.srv = nil
 	conns := make([]*conn, 0, len(h.conns))
 	for c := range h.conns {
 		conns = append(conns, c)
@@ -157,11 +127,6 @@ func (h *Hub) Stop() {
 	h.byACP = make(map[string]*conn)
 	h.mu.Unlock()
 
-	if srv != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = srv.Shutdown(ctx)
-		cancel()
-	}
 	for _, c := range conns {
 		c.close()
 	}
@@ -589,11 +554,16 @@ func (c *conn) handleSessionCancelLocked() {
 }
 
 // handlePermissionRespondLocked 处理用户对工具权限审批的回执（permission.respond）。
-// payload：{session_id, request_id, allow: bool}，按 request_id 精确应答。前置：持 c.mu。
+// payload：{session_id, request_id, allow: bool, option_id?: string}，
+// 按 request_id 精确应答；option_id 可选，ask 决策时回显用户所选 optionId。前置：持 c.mu。
 func (c *conn) handlePermissionRespondLocked(frame clientFrame) {
 	allow := false
 	if a, ok := frame.Payload["allow"].(bool); ok {
 		allow = a
+	}
+	optionID := ""
+	if o, ok := frame.Payload["option_id"].(string); ok {
+		optionID = o
 	}
 	reqID, ok := frame.Payload["request_id"].(float64)
 	if !ok {
@@ -601,7 +571,7 @@ func (c *conn) handlePermissionRespondLocked(frame clientFrame) {
 		logger.Warn("agentproxy: permission.respond without request_id, ignore")
 		return
 	}
-	c.module.RespondPermission(int64(reqID), allow)
+	c.module.RespondPermissionOption(int64(reqID), allow, optionID)
 }
 
 // enqueueErrorLocked 发送错误帧。前置：持 c.mu。

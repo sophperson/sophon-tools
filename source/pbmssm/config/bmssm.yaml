@@ -1,5 +1,5 @@
 server:
-  listenIP: ""
+  listenIP: 127.0.0.1
   port: 9779
   auth: true
   # authSecret 留空：启动时生成随机 32 字节 JWT secret 持久化到
@@ -52,13 +52,15 @@ llm-proxy:
   listenIP: 127.0.0.1    # 仅本机可访问
 
 # Reasonix ACP 适配器（agentproxy）：管理 reasonix acp 进程 + ACP v1 客户端 + 会话。
-# WS 端点（18990）与前端协议适配在 S3 接入；此处只配进程与会话核心。
+# 注意：agent 的 WS 已合并到主 server（server.listenIP:server.port 的 /agent/ws 路由），
+# 不再存在 agentproxy:18990 独立监听/直连端点；下列 listenIP/port 仅作进程与会话核心的
+# 配置占位（无独立监听使用），绑定回环更稳妥。
 # enabled 默认 false：reasonix 二进制部署（T5 部署步骤）后置 true 再重启 bmssm。
 agentproxy:
   enabled: false                       # 总开关（reasonix 部署后置 true）
-  listenIP: 0.0.0.0                    # WS 服务绑定（S3 前端 ws://<host>:18990 直连）
-  port: 18990                          # WS 端点端口（已核实空闲）
+  listenIP: 127.0.0.1                  # 无独立监听；占位默认绑定回环（已被主 server /agent/ws 接管）
+  port: 18990                          # 保留占位（已被主 server /agent/ws 路由取代，不再监听）
   binaryPath: ""                       # 空则探测 PATH（reasonix）
-  workDir: /home/linaro                # 会话 cwd
+  workDir: /data/sophon/reasonix-home  # 会话 cwd
   model: ""                            # 空 = reasonix 默认；如 deepseek-pro
   restartBackoffMax: 30s               # 崩溃重启退避上限

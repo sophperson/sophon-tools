@@ -47,7 +47,7 @@ func LoadFromDir(dir string) bool {
 
 	v.SetDefault("server.port", "9779")
 	v.SetDefault("server.auth", true)
-	v.SetDefault("server.listenIP", "")
+	v.SetDefault("server.listenIP", "127.0.0.1")
 	v.SetDefault("server.authSecret", "") // 空 → 启动时随机生成并持久化（pkg/auth.EnsureSecret）
 	v.SetDefault("server.defaultPassword", "admin")
 	v.SetDefault("server.deviceName", "device_1")
@@ -97,14 +97,14 @@ func LoadFromDir(dir string) bool {
 
 	// Reasonix ACP 适配器（agentproxy）：进程管理 + ACP 客户端 + 会话。
 	// enabled 默认 false：reasonix 二进制未部署时不自动拉进程（T5 部署后再开）。
-	// listenIP 默认 0.0.0.0：前端对话页经 ws://<host>/18990/agent/ws 直连 agentproxy，
-	// 绑定回环（127.0.0.1）会导致浏览器无法连上（"连接未就绪"）；WS 已用
-	// token.<forwardKey> 子协议鉴权兜底，暴露到局域网可接受。
+	// 注意：agent 的 WS 已合并到主 server（server.listenIP:server.port 的 /agent/ws 路由），
+	// 不存在独立 agentproxy 监听器；下面 listenIP/port 仅保留作进程与会话核心的
+	// 配置占位（无独立监听使用）。绑定回环更稳妥（防误以为存在局域网暴露端口）。
 	v.SetDefault("agentproxy.enabled", false)
-	v.SetDefault("agentproxy.listenIP", "0.0.0.0")
+	v.SetDefault("agentproxy.listenIP", "127.0.0.1")
 	v.SetDefault("agentproxy.port", 18990)
 	v.SetDefault("agentproxy.binaryPath", "")
-	v.SetDefault("agentproxy.workDir", "/home/linaro")
+	v.SetDefault("agentproxy.workDir", "/data/sophon/reasonix-home")
 	v.SetDefault("agentproxy.model", "")
 	v.SetDefault("agentproxy.restartBackoffMax", "30s")
 

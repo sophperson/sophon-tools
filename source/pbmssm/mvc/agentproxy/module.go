@@ -100,15 +100,8 @@ func (m *Module) Start() error {
 		_ = ensureWorkDir(m.cfg.WorkDir)
 	}
 	m.sessions.LoadAll()
-	// WS 服务随模块启动（与 enabled 无关：WebSocket 端点始终可连接，
-	// 但 reasonix 未就绪时发送会返回错误帧）。
-	if m.hub != nil {
-		go func() {
-			if err := m.hub.Start(); err != nil {
-				logger.Error("agentproxy: ws hub start failed: %v", err)
-			}
-		}()
-	}
+	// WS 端点由 bmssm 主 gin server 挂载 /agent/ws（HubHandler() → AgentWSHandler），
+	// 不再在此拉起独立 18990 http.Server。
 	// 需求(MYS-210)：agent 服务默认关闭，且 bmssm 重启后保持默认关闭。
 	// 这里不据 m.cfg.Enabled 自动拉起 reasonix 进程（即使配置 enabled=true）——
 	// 仅当用户在「Agent 服务管理」手动 start（SetEnabled(true)）才启动；手动启动会

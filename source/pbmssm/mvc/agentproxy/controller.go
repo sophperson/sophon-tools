@@ -18,7 +18,7 @@ type ServiceStatus struct {
 	SubState     string `json:"subState"`     // process manager 生命周期状态串
 	EnabledState string `json:"enabledState"` // agentproxy.enabled → enabled / disabled
 	MainPID      string `json:"mainPid"`      // reasonix acp 进程 pid
-	Ports        []int  `json:"ports"`        // 监听端口（agentproxy WS 端口）
+	Ports        []int  `json:"ports"`        // 监听端口（agent WS 并入主 9779，无独立端口，恒为空）
 	Running      bool   `json:"running"`      // 端口可达/进程存活
 	Healthy      bool   `json:"healthy"`      // 健康检查（initialize 成功 + stdin 可写）
 	LogTail      string `json:"logTail"`      // reasonix 最近 stderr 日志尾部
@@ -67,7 +67,7 @@ func (c *Controller) buildStatus() *ServiceStatus {
 	out.SessionCount = sessionCount
 	out.MainPID = intToStr(pid)
 	out.LogTail = stderr
-	out.Ports = []int{mod.cfg.Port}
+	out.Ports = []int{} // agent WS 由 bmssm 主 server（9779）承载，无独立监听端口
 	if enabled {
 		out.EnabledState = "enabled"
 	} else {
@@ -150,6 +150,17 @@ type Controller struct{}
 // DefaultController 创建 Controller。
 func DefaultController() *Controller {
 	return &Controller{}
+}
+
+// HubHandler 返回 agent WS 处理器（供 router 挂 /agent/ws）。未初始化返回 nil。
+func HubHandler() http.Handler {
+	globalMu.Lock()
+	m := globalMod
+	globalMu.Unlock()
+	if m == nil || m.hub == nil {
+		return nil
+	}
+	return http.HandlerFunc(m.hub.AgentWSHandler)
 }
 
 func intToStr(n int) string { return strconv.Itoa(n) }
