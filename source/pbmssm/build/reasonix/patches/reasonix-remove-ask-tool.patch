@@ -1,0 +1,250 @@
+diff --git a/internal/boot/boot.go b/internal/boot/boot.go
+index 9d584b37..c0701ce9 100644
+--- a/internal/boot/boot.go
++++ b/internal/boot/boot.go
+@@ -1188,11 +1188,10 @@ func build(ctx context.Context, opts Options) (*BuildResult, error) {
+ 	addSessionTools()
+ 	addMemoryTools()
+ 
+-	// The `ask` tool puts structured multiple-choice questions to the user. It
+-	// reaches them through the Asker on the call context, which interactive
+-	// frontends wire to the controller (EnableInteractiveApproval); a headless run
+-	// has none, so ask resolves to "decide for yourself".
+-	reg.Add(agent.NewAskTool())
++	// The `ask` tool is removed (MYS-212): the model asks the user for decisions
++	// directly in the conversation text (see config.UserDecisionPolicy) instead of
++	// emitting a structured multiple-choice approval. The Asker/interactive wiring
++	// is retained for host-driven prompts; only the model-facing tool is gone.
+ 
+ 	// Skill tools: read_only_skill is a narrow explicitly read-only entry point; the
+ 	// full skills source adds run_skill / install_skill plus the dedicated
+diff --git a/internal/boot/boot_test.go b/internal/boot/boot_test.go
+index f1e64994..7b30256f 100644
+--- a/internal/boot/boot_test.go
++++ b/internal/boot/boot_test.go
+@@ -2289,7 +2289,6 @@ func contractEntryNames(entries []tool.ContractEntry) []string {
+ // role setting under identical configuration (core tools + host-control tools).
+ func unifiedBootToolNames() []string {
+ 	return []string{
+-		"ask",
+ 		"bash",
+ 		"bash_output",
+ 		"complete_step",
+@@ -2349,7 +2348,7 @@ command = "reasonix-missing-mockmcp"
+ 	if got := toolSchemaNames(req.Tools); !reflect.DeepEqual(got, wantTools) {
+ 		t.Fatalf("light first request tool order changed\ngot  %v\nwant %v", got, wantTools)
+ 	}
+-	for _, want := range []string{"compress", "use_capability", "read_file", "edit_file", "write_file", "bash", "ask"} {
++	for _, want := range []string{"compress", "use_capability", "read_file", "edit_file", "write_file", "bash"} {
+ 		if !requestHasTool(req, want) {
+ 			t.Fatalf("light first request missing tool %q; tools=%v", want, toolSchemaNames(req.Tools))
+ 		}
+@@ -2892,8 +2891,7 @@ api_key_env = "REASONIX_TEST_KEY_UNSET"
+ 	sys := systemMessage(ctrl.History())
+ 	for _, want := range []string{
+ 		"User-owned choices",
+-		"call the ask tool",
+-		"Do not ask in prose",
++		"ask the user directly in your reply",
+ 	} {
+ 		if !strings.Contains(sys, want) {
+ 			t.Fatalf("user decision policy missing %q from custom system prompt:\n%s", want, sys)
+diff --git a/internal/boot/testdata/golden/prefix_shape.json b/internal/boot/testdata/golden/prefix_shape.json
+index ac8282a8..bd3558a7 100644
+--- a/internal/boot/testdata/golden/prefix_shape.json
++++ b/internal/boot/testdata/golden/prefix_shape.json
+@@ -1,7 +1,7 @@
+ {
+-  "SystemHash": "c4a54b2f61c5e15f",
+-  "ToolsHash": "ab59af24c3a040dc",
+-  "PrefixHash": "bc2183f91e6db07c",
++  "SystemHash": "08d7d09752fb1855",
++  "ToolsHash": "24f70ecfa63724f3",
++  "PrefixHash": "c971aebf9bb43039",
+   "LogRewriteVersion": 0,
+-  "ToolSchemaTokens": 3931
++  "ToolSchemaTokens": 3521
+ }
+diff --git a/internal/boot/testdata/golden/provider_request.json b/internal/boot/testdata/golden/provider_request.json
+index e3b9abf3..390bf83f 100644
+--- a/internal/boot/testdata/golden/provider_request.json
++++ b/internal/boot/testdata/golden/provider_request.json
+@@ -2,7 +2,7 @@
+   "Messages": [
+     {
+       "role": "system",
+-      "content": "BASE SYSTEM PROMPT\n\nUser-owned choices: when a consequential decision has no safe, obvious default, call the ask tool so the user can choose. Otherwise proceed with a sensible reversible default. Do not ask in prose when ask is available. In non-interactive runs, state the assumption and take the safest reversible path.\n\nWork practices: when the request or a linked discussion names a specific approach or expected behavior, implement exactly that; if you believe a different approach is better, state the trade-off explicitly instead of silently substituting it. Keep scratch work (repro scripts, probes, generated output) out of the repository — use a temp directory or clean up before finishing — and review the final diff before declaring done: only the intended changes, no leftovers, and no known regressions. Scale verification to the change: reproduce the problem and run the most relevant focused tests.\n\nReply in the same language the user is using in their most recent message: if they write in Chinese answer in Chinese, in English answer in English, and switch whenever they switch. Let this also guide the language you think in. Always keep code, identifiers, file paths, shell commands, and technical terms in their original form — never translate them.\n\nCurrent workspace: \"\u003cROOT\u003e\"\n\n# Skills — playbooks you can invoke\n\nOne-liner index. Before non-trivial work, scan it: if an untagged (inline) skill is even plausibly relevant to the task, invoke it before continuing instead of pre-judging — loading one imperfect inline skill is cheap. Skills tagged `[🧬 subagent]` are the heavy path; reach for them only when the task genuinely needs context-heavy work, not on weak relevance. Each entry is a built-in or a user-authored playbook. Call `run_skill({ name: \"\u003cskill-name\u003e\", arguments: \"\u003ctask\u003e\" })` — `name` is JUST the identifier (e.g. `\"explore\"`), NOT the `[🧬 subagent]` tag that follows it. Prefer the dedicated top-level tool when one exists for a built-in subagent skill. Entries tagged `[🧬 subagent]` spawn an isolated subagent — its tool calls and reasoning never enter your context, only its final answer does; use them for context-heavy work (deep exploration, multi-step research) where you only need the conclusion. Untagged skills are inlined: the body becomes a tool result you read and act on directly. The user can also invoke a skill via `/\u003cname\u003e`.\n\n```\n- explore [🧬 subagent] — Explore the codebase in an isolated subagent — wide-net read-only investigation that returns one distilled an…\n- init — Bootstrap or refresh this project's AGENTS.md — analyze the codebase (structure, build/test commands, architecture, conventio…\n- install-capability — Install or uninstall Reasonix MCP servers and skills from a URL, GitHub/raw file, local path/folder, .mcp.json,…\n- reasonix-guide — Troubleshoot and configure Reasonix capabilities: Skills (project/custom/global/builtin priority, discovery dirs), …\n- research [🧬 subagent] — Research a question by combining web_fetch + code reading in an isolated subagent. Best for: 'is X supported…\n- review [🧬 subagent] — Review the pending changes (current branch diff by default) in an isolated subagent — flags correctness, secur…\n- security-review [🧬 subagent] — Security-focused review of the current branch diff in an isolated subagent — flags injection/authz/se…\n- test — Run the project's test suite, diagnose failures, propose+apply fixes, re-run until green (or stop after 2 attempts on the sam…\n```"
++      "content": "BASE SYSTEM PROMPT\n\nUser-owned choices: when a consequential decision has no safe, obvious default, ask the user directly in your reply — state the question clearly in plain text and stop, waiting for their next message before continuing. Otherwise proceed with a sensible reversible default. In non-interactive runs, state the assumption and take the safest reversible path.\n\nWork practices: when the request or a linked discussion names a specific approach or expected behavior, implement exactly that; if you believe a different approach is better, state the trade-off explicitly instead of silently substituting it. Keep scratch work (repro scripts, probes, generated output) out of the repository — use a temp directory or clean up before finishing — and review the final diff before declaring done: only the intended changes, no leftovers, and no known regressions. Scale verification to the change: reproduce the problem and run the most relevant focused tests.\n\nReply in the same language the user is using in their most recent message: if they write in Chinese answer in Chinese, in English answer in English, and switch whenever they switch. Let this also guide the language you think in. Always keep code, identifiers, file paths, shell commands, and technical terms in their original form — never translate them.\n\nCurrent workspace: \"\u003cROOT\u003e\"\n\n# Skills — playbooks you can invoke\n\nOne-liner index. Before non-trivial work, scan it: if an untagged (inline) skill is even plausibly relevant to the task, invoke it before continuing instead of pre-judging — loading one imperfect inline skill is cheap. Skills tagged `[🧬 subagent]` are the heavy path; reach for them only when the task genuinely needs context-heavy work, not on weak relevance. Each entry is a built-in or a user-authored playbook. Call `run_skill({ name: \"\u003cskill-name\u003e\", arguments: \"\u003ctask\u003e\" })` — `name` is JUST the identifier (e.g. `\"explore\"`), NOT the `[🧬 subagent]` tag that follows it. Prefer the dedicated top-level tool when one exists for a built-in subagent skill. Entries tagged `[🧬 subagent]` spawn an isolated subagent — its tool calls and reasoning never enter your context, only its final answer does; use them for context-heavy work (deep exploration, multi-step research) where you only need the conclusion. Untagged skills are inlined: the body becomes a tool result you read and act on directly. The user can also invoke a skill via `/\u003cname\u003e`.\n\n```\n- explore [🧬 subagent] — Explore the codebase in an isolated subagent — wide-net read-only investigation that returns one distilled an…\n- init — Bootstrap or refresh this project's AGENTS.md — analyze the codebase (structure, build/test commands, architecture, conventio…\n- install-capability — Install or uninstall Reasonix MCP servers and skills from a URL, GitHub/raw file, local path/folder, .mcp.json,…\n- reasonix-guide — Troubleshoot and configure Reasonix capabilities: Skills (project/custom/global/builtin priority, discovery dirs), …\n- research [🧬 subagent] — Research a question by combining web_fetch + code reading in an isolated subagent. Best for: 'is X supported…\n- review [🧬 subagent] — Review the pending changes (current branch diff by default) in an isolated subagent — flags correctness, secur…\n- security-review [🧬 subagent] — Security-focused review of the current branch diff in an isolated subagent — flags injection/authz/se…\n- test — Run the project's test suite, diagnose failures, propose+apply fixes, re-run until green (or stop after 2 attempts on the sam…\n```"
+     },
+     {
+       "role": "user",
+@@ -29,68 +29,6 @@
+     }
+   ],
+   "Tools": [
+-    {
+-      "name": "ask",
+-      "description": "Ask the user one or more multiple-choice questions when you hit a decision that is genuinely theirs to make — one you can't resolve from the request, the code, or sensible defaults. The frontend shows the options for the user to pick; their choices are returned to you. Prefer this over asking in prose for any real fork (which approach, which library, scope). Don't use it for decisions with an obvious default — pick the sensible option and proceed. Tool-approval modes such as YOLO do not answer these questions for the user. Each question has a short `header` (a tab label), the `question` text, 2-4 `options` (each a `label` and optional `description`; put any recommended option first), and `multiSelect` when more than one may apply.",
+-      "parameters": {
+-        "properties": {
+-          "questions": {
+-            "description": "1-4 questions to ask together.",
+-            "items": {
+-              "properties": {
+-                "header": {
+-                  "description": "Very short label for the question (a tab title), e.g. \"Library\".",
+-                  "type": "string"
+-                },
+-                "multiSelect": {
+-                  "description": "Allow selecting more than one option.",
+-                  "type": "boolean"
+-                },
+-                "options": {
+-                  "description": "The choices. Put any recommended option first.",
+-                  "items": {
+-                    "properties": {
+-                      "description": {
+-                        "description": "Optional one-line explanation of the choice.",
+-                        "type": "string"
+-                      },
+-                      "label": {
+-                        "description": "The choice text (concise).",
+-                        "type": "string"
+-                      }
+-                    },
+-                    "required": [
+-                      "label"
+-                    ],
+-                    "type": "object"
+-                  },
+-                  "maxItems": 4,
+-                  "minItems": 2,
+-                  "type": "array"
+-                },
+-                "question": {
+-                  "description": "The full question to ask.",
+-                  "type": "string"
+-                }
+-              },
+-              "required": [
+-                "header",
+-                "options",
+-                "question"
+-              ],
+-              "type": "object"
+-            },
+-            "maxItems": 4,
+-            "minItems": 1,
+-            "type": "array"
+-          }
+-        },
+-        "required": [
+-          "questions"
+-        ],
+-        "type": "object"
+-      }
+-    },
+     {
+       "name": "bash",
+       "description": "Execute a command in the shell and return combined stdout/stderr. Use for builds, tests, git, package managers, etc. To search/read/list/edit/move files, prefer the dedicated tools (grep, read_file, ls, glob, edit_file, move_file) over shell grep/cat/ls/find/sed/mv/Move-Item — they behave identically on every OS. For symbol search or architecture questions, prefer LSP/read tools and targeted grep before shell commands.",
+diff --git a/internal/boot/testdata/golden/system_prompt.txt b/internal/boot/testdata/golden/system_prompt.txt
+index 7ccfe6f7..61a2e29f 100644
+--- a/internal/boot/testdata/golden/system_prompt.txt
++++ b/internal/boot/testdata/golden/system_prompt.txt
+@@ -1,6 +1,6 @@
+ BASE SYSTEM PROMPT
+ 
+-User-owned choices: when a consequential decision has no safe, obvious default, call the ask tool so the user can choose. Otherwise proceed with a sensible reversible default. Do not ask in prose when ask is available. In non-interactive runs, state the assumption and take the safest reversible path.
++User-owned choices: when a consequential decision has no safe, obvious default, ask the user directly in your reply — state the question clearly in plain text and stop, waiting for their next message before continuing. Otherwise proceed with a sensible reversible default. In non-interactive runs, state the assumption and take the safest reversible path.
+ 
+ Work practices: when the request or a linked discussion names a specific approach or expected behavior, implement exactly that; if you believe a different approach is better, state the trade-off explicitly instead of silently substituting it. Keep scratch work (repro scripts, probes, generated output) out of the repository — use a temp directory or clean up before finishing — and review the final diff before declaring done: only the intended changes, no leftovers, and no known regressions. Scale verification to the change: reproduce the problem and run the most relevant focused tests.
+ 
+diff --git a/internal/boot/testdata/golden/tool_schemas.json b/internal/boot/testdata/golden/tool_schemas.json
+index 7903ff2b..9fa58f1f 100644
+--- a/internal/boot/testdata/golden/tool_schemas.json
++++ b/internal/boot/testdata/golden/tool_schemas.json
+@@ -1,67 +1,4 @@
+ [
+-  {
+-    "Name": "ask",
+-    "Description": "Ask the user one or more multiple-choice questions when you hit a decision that is genuinely theirs to make — one you can't resolve from the request, the code, or sensible defaults. The frontend shows the options for the user to pick; their choices are returned to you. Prefer this over asking in prose for any real fork (which approach, which library, scope). Don't use it for decisions with an obvious default — pick the sensible option and proceed. Tool-approval modes such as YOLO do not answer these questions for the user. Each question has a short `header` (a tab label), the `question` text, 2-4 `options` (each a `label` and optional `description`; put any recommended option first), and `multiSelect` when more than one may apply.",
+-    "ReadOnly": true,
+-    "Schema": {
+-      "properties": {
+-        "questions": {
+-          "description": "1-4 questions to ask together.",
+-          "items": {
+-            "properties": {
+-              "header": {
+-                "description": "Very short label for the question (a tab title), e.g. \"Library\".",
+-                "type": "string"
+-              },
+-              "multiSelect": {
+-                "description": "Allow selecting more than one option.",
+-                "type": "boolean"
+-              },
+-              "options": {
+-                "description": "The choices. Put any recommended option first.",
+-                "items": {
+-                  "properties": {
+-                    "description": {
+-                      "description": "Optional one-line explanation of the choice.",
+-                      "type": "string"
+-                    },
+-                    "label": {
+-                      "description": "The choice text (concise).",
+-                      "type": "string"
+-                    }
+-                  },
+-                  "required": [
+-                    "label"
+-                  ],
+-                  "type": "object"
+-                },
+-                "maxItems": 4,
+-                "minItems": 2,
+-                "type": "array"
+-              },
+-              "question": {
+-                "description": "The full question to ask.",
+-                "type": "string"
+-              }
+-            },
+-            "required": [
+-              "header",
+-              "options",
+-              "question"
+-            ],
+-            "type": "object"
+-          },
+-          "maxItems": 4,
+-          "minItems": 1,
+-          "type": "array"
+-        }
+-      },
+-      "required": [
+-        "questions"
+-      ],
+-      "type": "object"
+-    }
+-  },
+   {
+     "Name": "bash",
+     "Description": "Execute a command in the shell and return combined stdout/stderr. Use for builds, tests, git, package managers, etc. To search/read/list/edit/move files, prefer the dedicated tools (grep, read_file, ls, glob, edit_file, move_file) over shell grep/cat/ls/find/sed/mv/Move-Item — they behave identically on every OS. For symbol search or architecture questions, prefer LSP/read tools and targeted grep before shell commands.",
+diff --git a/internal/config/config.go b/internal/config/config.go
+index c7e6fc56..7c3926f8 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -1814,8 +1814,10 @@ Use the available tools when they help you complete the user's request.
+ Keep changes focused and responses concise.`
+ 
+ // UserDecisionPolicy is appended to every system prompt, including user-custom
+-// prompts, so custom personas cannot accidentally remove the `ask` UI contract.
+-const UserDecisionPolicy = `User-owned choices: when a consequential decision has no safe, obvious default, call the ask tool so the user can choose. Otherwise proceed with a sensible reversible default. Do not ask in prose when ask is available. In non-interactive runs, state the assumption and take the safest reversible path.`
++// prompts. The dedicated `ask` tool is removed (MYS-212): the model asks the user
++// for decisions directly in the conversation text and pauses for their reply,
++// rather than emitting a structured multiple-choice approval.
++const UserDecisionPolicy = `User-owned choices: when a consequential decision has no safe, obvious default, ask the user directly in your reply — state the question clearly in plain text and stop, waiting for their next message before continuing. Otherwise proceed with a sensible reversible default. In non-interactive runs, state the assumption and take the safest reversible path.`
+ 
+ // LanguagePolicy is the auto fallback appended to the system prompt when no
+ // concrete UI language is resolved. It is static English text, so it stays part

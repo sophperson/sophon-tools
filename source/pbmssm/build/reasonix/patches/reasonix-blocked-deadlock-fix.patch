@@ -1,0 +1,114 @@
+diff --git a/internal/agent/context_manager.go b/internal/agent/context_manager.go
+index 302e8ff5..ee8249b3 100644
+--- a/internal/agent/context_manager.go
++++ b/internal/agent/context_manager.go
+@@ -99,10 +99,20 @@ func (m ContextManager) prepareOnce(ctx context.Context, policy ContextPreparePo
+ 	}
+ 	inputHash := a.contextMaintenanceInputHash(visible)
+ 	if blocked, reason := a.contextMaintenanceBlocked(inputHash); blocked && policy.Trigger != CompactionTriggerManual {
+-		if policy.Trigger == CompactionTriggerOverflow || est >= hard {
+-			return PreparedContext{}, fmt.Errorf("%w: %s", ErrCompactionRequired, reason)
++		if policy.Trigger != CompactionTriggerOverflow && est < hard {
++			// Normal pressure while a previous fold is blocked and context has not
++			// hit the physical ceiling: do not pay for another summary yet. The
++			// blocked receipt is generation-scoped and lifts on a later successful
++			// fold (which exposes the protected tail to folding again).
++			return prepared, nil
+ 		}
+-		return prepared, nil
++		// Overflow / at-physical-ceiling while blocked: this is the one chance to
++		// actually fold (force) the protected tail and lift the block, instead of
++		// failing the turn outright. Falling through to foldContext with
++		// forceFold=true lets acceptCheckpointCandidate accept a strictly-smaller
++		// candidate below the trigger, so the session self-heals instead of
++		// deadlocking permanently under a stuck "blocked" receipt.
++		_ = reason
+ 	}
+ 	if est < fold {
+ 		a.sess.compaction.consecutive = 0
+diff --git a/internal/agent/context_manager_test.go b/internal/agent/context_manager_test.go
+index d8cbd15d..d2a9b3e2 100644
+--- a/internal/agent/context_manager_test.go
++++ b/internal/agent/context_manager_test.go
+@@ -171,3 +171,81 @@ func TestStrictAlternatingRolesStillConvergesBeforeSampling(t *testing.T) {
+ 		}
+ 	}
+ }
++
++// TestBlockedStateStillAttemptsOverflowFold is a regression test for the
++// deadlock fixed in this patch: once a compaction candidate exceeds the 50%
++// ceiling and a blocked receipt is written, the previous code returned
++// ErrCompactionRequired at the overflow / physical-ceiling boundary without
++// ever folding — the blocked state could never lift and the session deadlocked
++// permanently with its protected tool tail never folding. This fix lowers the
++// overflow path through foldContext (force) so the fold actually runs and the
++// blocked tail has a chance to be folded, instead of failing the turn.
++func TestBlockedStateStillAttemptsOverflowFold(t *testing.T) {
++	const window = 10_000
++	path := filepath.Join(t.TempDir(), "session.jsonl")
++	newAgent := func(p provider.Provider) *Agent {
++		a := New(p, tool.NewRegistry(), &Session{Messages: []provider.Message{
++			{Role: provider.RoleSystem, Content: "system"},
++			{Role: provider.RoleUser, Content: "task"},
++			{Role: provider.RoleAssistant, Content: strings.Repeat("old work ", 500)},
++			{Role: provider.RoleUser, Content: "recent request"},
++			{Role: provider.RoleAssistant, Content: strings.Repeat("tail ", 300)},
++		}}, Options{
++			ContextWindow: window, CompactRatio: 0.85, RecentKeep: 2,
++			WorkspaceID: "workspace", ModelRef: "model",
++		}, event.Discard)
++		a.BindSessionPath(path, true)
++		return a
++	}
++
++	// fold = 8500; hard = 9744. Seed a persistent blocked/failed receipt with a
++	// pressure attempt observed between fold and hard (the failing provider makes
++	// the summary fail, persisting a blocked receipt).
++	failProv := &fakeProvider{streamErr: errors.New("summary unavailable")}
++	fail := newAgent(failProv)
++	seed := ContextPreparePolicy{Trigger: CompactionTriggerPressure, ObservedInputTokens: 8600}
++	if _, err := fail.contextManager().Prepare(context.Background(), seed); err != nil {
++		t.Fatalf("seed blocked: %v", err)
++	}
++	if st := fail.sess.compactionState.LastReceipt; st == nil || (st.Status != "blocked" && st.Status != "failed") {
++		t.Fatalf("seed receipt status = %v, want blocked/failed", st)
++	}
++
++	// Now run at the overflow boundary on a FRESH agent that restores that same
++	// blocked receipt (BindSessionPath re-loads it) but with a provider that can
++	// summarize. Before the fix, the blocked guard returned ErrCompactionRequired
++	// without ever invoking the summarizer (deadlock). After the fix it must fall
++	// through to the fold, so the summarizer is invoked.
++	goodProv := &overflowFoldProvider{}
++	good := newAgent(goodProv)
++	if _, err := good.contextManager().Prepare(context.Background(),
++		ContextPreparePolicy{Trigger: CompactionTriggerOverflow}); err != nil {
++		// The fold itself may legitimately report the candidate still sits above
++		// the trigger (a deferred failure). The regression we lock down is that the
++		// blocked guard no longer short-circuits the fold: the summarizer must run.
++		t.Logf("overflow Prepare returned err (fold attempted): %v", err)
++	}
++	if goodProv.got == nil {
++		t.Fatalf("overflow prepare after blocked never invoked the summarizer — " +
++			"the blocked guard still short-circuits the fold (deadlock not fixed)")
++	}
++}
++
++// A streamable provider that both emits a prompt-token usage (so estimatedInput
++// can cross the window) and records the messages it saw; used to observe the
++// overflow fold actually running for a session holding a blocked receipt.
++//
++// (fakeProvider in compact_test.go already covers stream behavior; this type
++// guarantees promptTokens > 0 so the overflow threshold can be crossed.)
++type overflowFoldProvider struct{ got []provider.Message }
++
++func (p *overflowFoldProvider) Name() string { return "overflow-fold" }
++func (p *overflowFoldProvider) Stream(_ context.Context, req provider.Request) (<-chan provider.Chunk, error) {
++	p.got = req.Messages
++	ch := make(chan provider.Chunk, 3)
++	ch <- provider.Chunk{Type: provider.ChunkText, Text: "summary folded"}
++	ch <- provider.Chunk{Type: provider.ChunkUsage, Usage: &provider.Usage{PromptTokens: 2000, TotalTokens: 4000}}
++	ch <- provider.Chunk{Type: provider.ChunkDone}
++	close(ch)
++	return ch, nil
++}
